@@ -90,10 +90,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "network"
-version = "0.1.0"
-
-[[package]]
 name = "node"
 version = "0.1.0"
 dependencies = [
@@ -115,7 +111,6 @@ name = "peerland"
 version = "0.1.0"
 dependencies = [
  "cargo-husky",
- "network",
  "node",
  "tokio",
 ]

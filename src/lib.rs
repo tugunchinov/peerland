@@ -1,11 +1,15 @@
 pub async fn start() {
     let node_1_address = "0.0.0.0:9875";
     let node_2_address = "0.0.0.0:9876";
+    let node_3_address = "0.0.0.0:9878";
 
     let node_1 = node::Node::new(node_1_address)
         .await
         .expect("TODO: make error");
     let node_2 = node::Node::new(node_2_address)
+        .await
+        .expect("TODO: make error");
+    let _node_3 = node::Node::new(node_3_address)
         .await
         .expect("TODO: make error");
 
