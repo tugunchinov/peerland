@@ -70,6 +70,11 @@ impl Node {
 
         Ok(&self.storage.last().unwrap())
     }
+
+    // TODO: remove
+    pub fn get_log(&self) -> Vec<Message> {
+        self.storage.clone()
+    }
 }
 
 #[cfg(test)]
@@ -92,14 +97,12 @@ mod tests {
             for i in 0..10 {
                 let my_msg = format!("node1_msg{i}");
 
-                println!("node 1 msg: {my_msg}");
-
                 node.choose_consensus_value(my_msg).await.expect("failed");
             }
 
-            println!("node 1 done");
-
             tokio::time::sleep(Duration::from_secs(50)).await;
+
+            println!("node 1 log: {:#?}", node.get_log());
 
             Ok(())
         });
@@ -114,6 +117,8 @@ mod tests {
                 node.choose_consensus_value(my_msg).await.expect("failed");
             }
 
+            println!("node 2 log: {:#?}", node.get_log());
+
             Ok(())
         });
 
@@ -127,9 +132,11 @@ mod tests {
                 node.choose_consensus_value(my_msg).await.expect("failed");
             }
 
+            println!("node 3 log: {:#?}", node.get_log());
+
             Ok(())
         });
 
-        matrix.run().expect("failed")
+        matrix.run().expect("failed");
     }
 }
