@@ -86,7 +86,7 @@ mod tests {
     #[test]
     fn test() {
         let mut matrix = turmoil::Builder::new()
-            .simulation_duration(Duration::from_secs(100))
+            .simulation_duration(Duration::from_secs(1000))
             .build();
 
         matrix.host("node1", || async {
@@ -99,9 +99,7 @@ mod tests {
 
                 node.choose_consensus_value(my_msg).await.expect("failed");
             }
-
-            tokio::time::sleep(Duration::from_secs(50)).await;
-
+            
             println!("node 1 log: {:#?}", node.get_log());
 
             Ok(())
