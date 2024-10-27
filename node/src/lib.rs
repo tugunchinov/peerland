@@ -99,7 +99,7 @@ mod tests {
 
                 node.choose_consensus_value(my_msg).await.expect("failed");
             }
-            
+
             println!("node 1 log: {:#?}", node.get_log());
 
             Ok(())
