@@ -3,6 +3,8 @@ mod net_types;
 
 use crate::error::NodeError;
 use crate::net_types::{ToSocketAddrs, UdpSocket};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 // TODO: create struct
 type Message = String;
@@ -11,17 +13,35 @@ pub struct Node {
     socket: UdpSocket,
 
     // TODO: make service
-    storage: Vec<Message>,
+    storage: Mutex<Vec<Message>>,
 }
 
 impl Node {
-    pub async fn new(my_address: impl ToSocketAddrs) -> Result<Self, NodeError> {
+    pub async fn new(my_address: impl ToSocketAddrs) -> Result<Arc<Self>, NodeError> {
         let socket = UdpSocket::bind(my_address).await.expect("TODO: make error");
 
-        Ok(Self {
+        let node = Arc::new(Self {
             socket,
-            storage: vec![],
-        })
+            storage: Mutex::new(vec![]),
+        });
+
+        {
+            let node = Arc::clone(&node);
+            tokio::spawn(async move { node.listen_messages().await });
+        }
+
+        Ok(node)
+    }
+
+    async fn listen_messages(&self) {
+        loop {
+            match self.recv_message().await {
+                Ok(msg) => {
+                    println!("recv message: {msg}");
+                }
+                Err(_e) => todo!(),
+            }
+        }
     }
 
     pub async fn send_message(
@@ -37,7 +57,7 @@ impl Node {
         Ok(())
     }
 
-    pub async fn recv_message(&self) -> Result<Message, NodeError> {
+    async fn recv_message(&self) -> Result<Message, NodeError> {
         let mut message_bytes = vec![0; 2048];
         let (_, sender) = self
             .socket
@@ -62,18 +82,15 @@ impl Node {
         Ok(vec![node_1_address, node_2_address, node_3_address])
     }
 
-    pub async fn choose_consensus_value(
-        &mut self,
-        my_value: Message,
-    ) -> Result<&Message, NodeError> {
-        self.storage.push(my_value);
+    pub async fn choose_consensus_value(&self, my_value: Message) -> Result<Message, NodeError> {
+        self.storage.lock().await.push(my_value.clone());
 
-        Ok(&self.storage.last().unwrap())
+        Ok(my_value)
     }
 
     // TODO: remove
-    pub fn get_log(&self) -> Vec<Message> {
-        self.storage.clone()
+    pub async fn get_log(&self) -> Vec<Message> {
+        self.storage.lock().await.clone()
     }
 }
 
@@ -90,7 +107,7 @@ mod tests {
             .build();
 
         matrix.host("node1", || async {
-            let mut node = Node::new((IpAddr::from(Ipv4Addr::UNSPECIFIED), 4411))
+            let node = Node::new((IpAddr::from(Ipv4Addr::UNSPECIFIED), 4411))
                 .await
                 .expect("TODO: make error");
 
@@ -100,13 +117,13 @@ mod tests {
                 node.choose_consensus_value(my_msg).await.expect("failed");
             }
 
-            println!("node 1 log: {:#?}", node.get_log());
+            println!("node 1 log: {:#?}", node.get_log().await);
 
             Ok(())
         });
 
         matrix.host("node2", || async {
-            let mut node = Node::new((IpAddr::from(Ipv4Addr::UNSPECIFIED), 3399))
+            let node = Node::new((IpAddr::from(Ipv4Addr::UNSPECIFIED), 3399))
                 .await
                 .expect("TODO: make error");
 
@@ -115,13 +132,13 @@ mod tests {
                 node.choose_consensus_value(my_msg).await.expect("failed");
             }
 
-            println!("node 2 log: {:#?}", node.get_log());
+            println!("node 2 log: {:#?}", node.get_log().await);
 
             Ok(())
         });
 
         matrix.host("node3", || async {
-            let mut node = Node::new((IpAddr::from(Ipv4Addr::UNSPECIFIED), 2288))
+            let node = Node::new((IpAddr::from(Ipv4Addr::UNSPECIFIED), 2288))
                 .await
                 .expect("TODO: make error");
 
@@ -130,7 +147,7 @@ mod tests {
                 node.choose_consensus_value(my_msg).await.expect("failed");
             }
 
-            println!("node 3 log: {:#?}", node.get_log());
+            println!("node 3 log: {:#?}", node.get_log().await);
 
             Ok(())
         });
