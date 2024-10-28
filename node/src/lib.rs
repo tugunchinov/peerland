@@ -1,8 +1,7 @@
 mod error;
-mod net_types;
 
 use crate::error::NodeError;
-use crate::net_types::{ToSocketAddrs, UdpSocket};
+use network::types::{ToSocketAddrs, UdpSocket};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -95,8 +94,10 @@ impl Node {
 }
 
 #[cfg(test)]
+#[cfg(feature = "simulation")]
 mod tests {
     use crate::Node;
+    use network::turmoil;
     use std::net::{IpAddr, Ipv4Addr};
     use tokio::time::Duration;
 
