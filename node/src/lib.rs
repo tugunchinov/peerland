@@ -9,7 +9,7 @@ use tokio::sync::Mutex;
 type Message = String;
 
 pub struct Node {
-    socket: UdpSocket,
+    socket: Arc<UdpSocket>,
 
     // TODO: make service
     storage: Mutex<Vec<Message>>,
@@ -17,7 +17,7 @@ pub struct Node {
 
 impl Node {
     pub async fn new(my_address: impl ToSocketAddrs) -> Result<Arc<Self>, NodeError> {
-        let socket = UdpSocket::bind(my_address).await.expect("TODO: make error");
+        let socket = Arc::new(UdpSocket::bind(my_address).await.expect("TODO: make error"));
 
         let node = Arc::new(Self {
             socket,
@@ -32,13 +32,15 @@ impl Node {
         Ok(node)
     }
 
-    async fn listen_messages(&self) {
+    async fn listen_messages(self: Arc<Self>) {
         loop {
             match self.recv_message().await {
                 Ok(msg) => {
-                    println!("recv message: {msg}");
+                    self.storage.lock().await.push(msg);
                 }
-                Err(_e) => todo!(),
+                Err(_e) => {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                }
             }
         }
     }
@@ -51,21 +53,18 @@ impl Node {
         self.socket
             .send_to(msg.as_bytes(), to)
             .await
-            .expect("TODO: make error");
+            .expect("failed sending message");
 
         Ok(())
     }
 
     async fn recv_message(&self) -> Result<Message, NodeError> {
         let mut message_bytes = vec![0; 2048];
-        let (_, sender) = self
+        let (_bytes_received, _sender) = self
             .socket
             .recv_from(&mut message_bytes)
             .await
             .expect("TODO: make error");
-
-        // TODO: log
-        println!("SENDER: {sender}");
 
         let message = String::from_utf8(message_bytes).expect("TODO: make error");
 
@@ -74,15 +73,17 @@ impl Node {
 
     pub async fn list_known_nodes(&self) -> Result<Vec<impl ToSocketAddrs>, NodeError> {
         // TODO: make discovery service
-        let node_1_address = "0.0.0.0:9875";
-        let node_2_address = "0.0.0.0:9876";
-        let node_3_address = "0.0.0.0:9878";
+        let node_1_address = "127.0.0.1:59875";
+        let node_2_address = "127.0.0.2:59876";
+        //let node_3_address = "0.0.0.0:59878";
 
-        Ok(vec![node_1_address, node_2_address, node_3_address])
+        Ok(vec![node_1_address, node_2_address])
     }
 
     pub async fn choose_consensus_value(&self, my_value: Message) -> Result<Message, NodeError> {
-        self.storage.lock().await.push(my_value.clone());
+        for node in self.list_known_nodes().await? {
+            self.send_message(my_value.clone(), node).await?;
+        }
 
         Ok(my_value)
     }
@@ -98,57 +99,53 @@ impl Node {
 mod tests {
     use crate::Node;
     use network::turmoil;
-    use std::net::{IpAddr, Ipv4Addr};
-    use tokio::time::Duration;
+    use network::turmoil::IpVersion;
+    use tracing::instrument::WithSubscriber;
+    use tracing::trace;
 
     #[test]
     fn test() {
-        let mut matrix = turmoil::Builder::new()
-            .simulation_duration(Duration::from_secs(1000))
-            .build();
+        let mut matrix = turmoil::Builder::default().build();
 
-        matrix.host("node1", || async {
-            let node = Node::new((IpAddr::from(Ipv4Addr::UNSPECIFIED), 4411))
+        tracing::subscriber::set_global_default(
+            tracing_subscriber::fmt()
+                .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+                .finish(),
+        )
+        .expect("Configure tracing");
+
+        matrix.host("127.1.1.1", || async {
+            let node = Node::new(("127.1.1.1", 44444))
                 .await
                 .expect("TODO: make error");
 
-            for i in 0..10 {
-                let my_msg = format!("node1_msg{i}");
+            node.send_message("hello from node 1".to_string(), ("127.1.1.2", 44444))
+                .await
+                .unwrap();
 
-                node.choose_consensus_value(my_msg).await.expect("failed");
-            }
+            trace!("node 1 sent message");
 
-            println!("node 1 log: {:#?}", node.get_log().await);
+            let msg = node.recv_message().await.unwrap();
+
+            trace!(message = ?msg, "node 1 received message");
 
             Ok(())
         });
 
-        matrix.host("node2", || async {
-            let node = Node::new((IpAddr::from(Ipv4Addr::UNSPECIFIED), 3399))
+        matrix.host("127.1.1.2", || async {
+            let node = Node::new(("127.1.1.2", 44444))
                 .await
                 .expect("TODO: make error");
 
-            for i in 0..10 {
-                let my_msg = format!("node2_msg{i}");
-                node.choose_consensus_value(my_msg).await.expect("failed");
-            }
-
-            println!("node 2 log: {:#?}", node.get_log().await);
-
-            Ok(())
-        });
-
-        matrix.host("node3", || async {
-            let node = Node::new((IpAddr::from(Ipv4Addr::UNSPECIFIED), 2288))
+            node.send_message("hello from node 2".to_string(), ("127.1.1.1", 44444))
                 .await
-                .expect("TODO: make error");
+                .unwrap();
 
-            for i in 0..10 {
-                let my_msg = format!("node3_msg{i}");
-                node.choose_consensus_value(my_msg).await.expect("failed");
-            }
+            trace!("node 2 sent message");
 
-            println!("node 3 log: {:#?}", node.get_log().await);
+            let msg = node.recv_message().await.unwrap();
+
+            trace!(message = ?msg, "node 2 received message");
 
             Ok(())
         });
