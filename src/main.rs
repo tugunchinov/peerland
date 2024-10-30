@@ -1,4 +1,3 @@
-#[tokio::main]
-async fn main() {
-    peerland::start().await
+fn main() {
+    peerland::start();
 }

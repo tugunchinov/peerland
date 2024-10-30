@@ -10,7 +10,7 @@ use tokio::sync::Mutex;
 type Message = String;
 
 pub struct Node {
-    listener: TcpListener,
+    socket: UdpSocket,
 
     // TODO: make service
     storage: Mutex<Vec<Message>>,
@@ -18,12 +18,10 @@ pub struct Node {
 
 impl Node {
     pub async fn new(my_address: impl ToSocketAddrs) -> Result<Arc<Self>, NodeError> {
-        let listener = TcpListener::bind(my_address)
-            .await
-            .expect("TODO: make error");
+        let socket = UdpSocket::bind(my_address).await.expect("TODO: make error");
 
         let node = Arc::new(Self {
-            listener,
+            socket,
             storage: Mutex::new(vec![]),
         });
         //
@@ -51,45 +49,22 @@ impl Node {
     pub async fn send_message(
         &self,
         msg: Message,
-        to: impl ToSocketAddrs + std::fmt::Debug + Clone,
+        to: impl ToSocketAddrs,
     ) -> Result<(), NodeError> {
-        tracing::trace!(to = ?to, "trying to connect");
-
-        let mut tcp_stream = TcpStream::connect(to.clone())
-            .await
-            .expect("TODO: make error");
-
-        tracing::trace!(to = ?to, "connected");
-
-        tcp_stream
-            .write_all(msg.as_bytes())
-            .await
-            .expect("failed sending message");
-
-        tcp_stream
-            .flush()
-            .await
-            .expect("failed flushing TCP stream");
+        self.socket.send_to(msg.as_bytes(), to).await.unwrap();
 
         Ok(())
     }
 
     async fn recv_message(&self) -> Result<Message, NodeError> {
-        let mut message_bytes = vec![0; 32];
+        let mut buf = vec![0; 128];
+        let (bytes, addr) = self.socket.recv_from(&mut buf).await.unwrap();
 
-        tracing::trace!("trying to receive bytes");
+        tracing::warn!(bytes = ?bytes, from = ?addr, "received");
 
-        let (mut stream, sender) = self.listener.accept().await.expect("TODO: make error");
+        let msg = String::from_utf8(buf).unwrap();
 
-        tracing::trace!(sender = ?sender);
-        stream
-            .read_buf(&mut message_bytes)
-            .await
-            .expect("TODO: make error");
-
-        let message = String::from_utf8(message_bytes).expect("TODO: make error");
-
-        Ok(message)
+        Ok(msg)
     }
 
     pub async fn list_known_nodes(&self) -> Result<Vec<impl ToSocketAddrs>, NodeError> {
@@ -115,17 +90,20 @@ impl Node {
     }
 }
 
-#[cfg(test)]
+//#[cfg(test)]
 #[cfg(feature = "simulation")]
-mod tests {
+pub mod tests {
     use crate::Node;
     use network::turmoil;
+    use network::turmoil::net::UdpSocket;
+    use network::types::{TcpListener, TcpStream};
+    use std::net::{IpAddr, Ipv4Addr};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    #[test]
-    fn test() {
-        let mut matrix = turmoil::Builder::default()
-            .tick_duration(tokio::time::Duration::from_secs(60))
-            .simulation_duration(tokio::time::Duration::from_secs(60 * 60 * 60))
+    //#[test]
+    pub fn test() {
+        let mut matrix = turmoil::Builder::new()
+            .max_message_latency(tokio::time::Duration::from_millis(100))
             .build();
 
         tracing::subscriber::set_global_default(
@@ -135,52 +113,42 @@ mod tests {
         )
         .expect("Configure tracing");
 
-        matrix.host("127.0.0.1", || async {
-            let node = Node::new(("127.0.0.1", 44444))
-                .await
-                .expect("TODO: make error");
-
-            tracing::warn!("node 1 init");
-
-            node.send_message("hello from node 1".to_string(), ("0.0.0.0", 44444))
+        matrix.host("node_1", || async {
+            let node = Node::new((IpAddr::from(Ipv4Addr::UNSPECIFIED), 9000))
                 .await
                 .unwrap();
 
-            tracing::warn!("node 1 sent message");
+            tracing::warn!("start listening");
 
             let msg = node.recv_message().await.unwrap();
 
-            tracing::warn!(message = ?msg, "node 1 received message");
+            tracing::warn!(msg = ?msg, "received");
 
             Ok(())
         });
 
-        matrix.host("0.0.0.0", || async {
-            let node = Node::new(("0.0.0.0", 44444))
-                .await
-                .expect("TODO: make error");
-
-            tracing::warn!("node 2 init");
-
-            node.send_message("hello from node 2".to_string(), ("127.0.0.1", 44444))
+        matrix.host("node_2", || async {
+            let node = Node::new((IpAddr::from(Ipv4Addr::UNSPECIFIED), 9000))
                 .await
                 .unwrap();
 
-            tracing::warn!("node 2 sent message");
+            tracing::warn!("binded");
 
-            let msg = node.recv_message().await.unwrap();
+            node.send_message("hello".to_string(), ("node_1", 9000))
+                .await
+                .unwrap();
 
-            tracing::warn!(message = ?msg, "node 2 received message");
+            tracing::warn!("sent");
 
             Ok(())
         });
 
-        for _ in 0..=50 {
+        for _ in 0..=100 {
             matrix.step().unwrap();
         }
 
         //println!("host: {}", matrix.is_host_running("127.0.0.1"));
 
-        //matrix.run().expect("failed");
+        matrix.run().unwrap();
     }
 }
