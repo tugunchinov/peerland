@@ -3,11 +3,11 @@ mod error;
 use crate::error::NodeError;
 use network::types::*;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 
 // TODO: create struct
 type Message = String;
+const MESSAGE_MAX_SIZE: usize = 1024;
 
 pub struct Node {
     socket: UdpSocket,
@@ -18,28 +18,31 @@ pub struct Node {
 
 impl Node {
     pub async fn new(my_address: impl ToSocketAddrs) -> Result<Arc<Self>, NodeError> {
-        let socket = UdpSocket::bind(my_address).await.expect("TODO: make error");
+        let socket = UdpSocket::bind(my_address).await?;
 
         let node = Arc::new(Self {
             socket,
             storage: Mutex::new(vec![]),
         });
-        //
-        // {
-        //     let node = Arc::clone(&node);
-        //     tokio::spawn(async move { node.listen_messages().await });
-        // }
+
+        {
+            let node = Arc::clone(&node);
+            tokio::spawn(async move { node.listen_messages().await });
+        }
 
         Ok(node)
     }
 
     async fn listen_messages(self: Arc<Self>) {
+        tracing::info!("start listening messages");
         loop {
             match self.recv_message().await {
                 Ok(msg) => {
+                    tracing::info!(message = ?msg, "received message");
                     self.storage.lock().await.push(msg);
                 }
-                Err(_e) => {
+                Err(e) => {
+                    tracing::error!(error = ?e, "failed receiving message");
                     tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
                 }
             }
@@ -51,18 +54,16 @@ impl Node {
         msg: Message,
         to: impl ToSocketAddrs,
     ) -> Result<(), NodeError> {
-        self.socket.send_to(msg.as_bytes(), to).await.unwrap();
+        self.socket.send_to(msg.as_bytes(), to).await?;
 
         Ok(())
     }
 
     async fn recv_message(&self) -> Result<Message, NodeError> {
-        let mut buf = vec![0; 128];
-        let (bytes, addr) = self.socket.recv_from(&mut buf).await.unwrap();
+        let mut buf = vec![0; MESSAGE_MAX_SIZE];
+        let (_bytes_received, _sender) = self.socket.recv_from(&mut buf).await?;
 
-        tracing::warn!(bytes = ?bytes, from = ?addr, "received");
-
-        let msg = String::from_utf8(buf).unwrap();
+        let msg = String::from_utf8(buf)?;
 
         Ok(msg)
     }
@@ -77,10 +78,6 @@ impl Node {
     }
 
     pub async fn choose_consensus_value(&self, my_value: Message) -> Result<Message, NodeError> {
-        // for node in self.list_known_nodes().await? {
-        //     self.send_message(my_value.clone(), node).await?;
-        // }
-
         Ok(my_value)
     }
 
@@ -88,23 +85,22 @@ impl Node {
     pub async fn get_log(&self) -> Vec<Message> {
         self.storage.lock().await.clone()
     }
+
+    pub async fn pending_forever(&self) {
+        std::future::pending::<()>().await;
+    }
 }
 
-//#[cfg(test)]
+#[cfg(test)]
 #[cfg(feature = "simulation")]
 pub mod tests {
     use crate::Node;
     use network::turmoil;
-    use network::turmoil::net::UdpSocket;
-    use network::types::{TcpListener, TcpStream};
     use std::net::{IpAddr, Ipv4Addr};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    //#[test]
+    #[test]
     pub fn test() {
-        let mut matrix = turmoil::Builder::new()
-            .max_message_latency(tokio::time::Duration::from_millis(100))
-            .build();
+        let mut matrix = turmoil::Builder::new().build();
 
         tracing::subscriber::set_global_default(
             tracing_subscriber::fmt()
@@ -118,11 +114,7 @@ pub mod tests {
                 .await
                 .unwrap();
 
-            tracing::warn!("start listening");
-
-            let msg = node.recv_message().await.unwrap();
-
-            tracing::warn!(msg = ?msg, "received");
+            node.pending_forever().await;
 
             Ok(())
         });
@@ -132,13 +124,9 @@ pub mod tests {
                 .await
                 .unwrap();
 
-            tracing::warn!("binded");
-
             node.send_message("hello".to_string(), ("node_1", 9000))
                 .await
                 .unwrap();
-
-            tracing::warn!("sent");
 
             Ok(())
         });
@@ -146,8 +134,6 @@ pub mod tests {
         for _ in 0..=100 {
             matrix.step().unwrap();
         }
-
-        //println!("host: {}", matrix.is_host_running("127.0.0.1"));
 
         matrix.run().unwrap();
     }

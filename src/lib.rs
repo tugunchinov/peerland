@@ -1,4 +1,1 @@
-pub fn start() {
-    #[cfg(feature = "simulation")]
-    node::tests::test();
-}
+pub async fn start() {}
