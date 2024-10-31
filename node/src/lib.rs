@@ -1,13 +1,11 @@
 mod error;
+mod message;
 
 use crate::error::NodeError;
+use crate::message::Message;
 use network::types::*;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-
-// TODO: create struct
-type Message = String;
-const MESSAGE_MAX_SIZE: usize = 1024;
 
 pub struct Node {
     socket: UdpSocket,
@@ -49,21 +47,23 @@ impl Node {
         }
     }
 
-    pub async fn send_message(
+    pub(crate) async fn send_message(
         &self,
         msg: Message,
         to: impl ToSocketAddrs,
     ) -> Result<(), NodeError> {
-        self.socket.send_to(msg.as_bytes(), to).await?;
+        self.socket.send_to(&msg.pack()?, to).await?;
 
         Ok(())
     }
 
     async fn recv_message(&self) -> Result<Message, NodeError> {
-        let mut buf = vec![0; MESSAGE_MAX_SIZE];
-        let (_bytes_received, _sender) = self.socket.recv_from(&mut buf).await?;
+        let mut buf = [0; 2 * Message::max_size()];
+        let (bytes_received, _sender) = self.socket.recv_from(&mut buf).await?;
 
-        let msg = String::from_utf8(buf)?;
+        tracing::trace!(buffer = ?buf, bytes_received = ?bytes_received);
+
+        let msg = Message::unpack(&buf[..bytes_received])?;
 
         Ok(msg)
     }
@@ -77,12 +77,15 @@ impl Node {
         Ok(vec![node_1_address, node_2_address])
     }
 
-    pub async fn choose_consensus_value(&self, my_value: Message) -> Result<Message, NodeError> {
+    pub(crate) async fn choose_consensus_value(
+        &self,
+        my_value: Message,
+    ) -> Result<Message, NodeError> {
         Ok(my_value)
     }
 
     // TODO: remove
-    pub async fn get_log(&self) -> Vec<Message> {
+    async fn get_log(&self) -> Vec<Message> {
         self.storage.lock().await.clone()
     }
 
@@ -94,6 +97,7 @@ impl Node {
 #[cfg(test)]
 #[cfg(feature = "simulation")]
 pub mod tests {
+    use crate::message::Message;
     use crate::Node;
     use network::turmoil;
     use std::net::{IpAddr, Ipv4Addr};
@@ -124,7 +128,7 @@ pub mod tests {
                 .await
                 .unwrap();
 
-            node.send_message("hello".to_string(), ("node_1", 9000))
+            node.send_message(Message::new(42), ("node_1", 9000))
                 .await
                 .unwrap();
 

@@ -21,3 +21,15 @@ impl From<std::string::FromUtf8Error> for NodeError {
         todo!()
     }
 }
+
+impl From<rmp_serde::encode::Error> for NodeError {
+    fn from(_value: rmp_serde::encode::Error) -> Self {
+        todo!()
+    }
+}
+
+impl From<rmp_serde::decode::Error> for NodeError {
+    fn from(_value: rmp_serde::decode::Error) -> Self {
+        todo!()
+    }
+}
