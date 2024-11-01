@@ -12,6 +12,9 @@ pub struct Node {
 
     // TODO: make service
     storage: Mutex<Vec<Message>>,
+
+    // TODO: better
+    known_nodes: Mutex<Vec<SocketAddr>>,
 }
 
 impl Node {
@@ -21,6 +24,7 @@ impl Node {
         let node = Arc::new(Self {
             socket,
             storage: Mutex::new(vec![]),
+            known_nodes: Mutex::new(vec![]),
         });
 
         {
@@ -75,6 +79,12 @@ impl Node {
         //let node_3_address = "0.0.0.0:59878";
 
         Ok(vec![node_1_address, node_2_address])
+    }
+
+    pub(crate) async fn register_node(&self, addr: SocketAddr) -> Result<(), NodeError> {
+        self.known_nodes.lock().await.push(addr);
+
+        Ok(())
     }
 
     pub(crate) async fn choose_consensus_value(
