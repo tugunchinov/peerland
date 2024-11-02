@@ -16,7 +16,7 @@ impl Message {
         }
     }
 
-    pub(crate) fn pack(self) -> Result<Vec<u8>, NodeError> {
+    pub(crate) fn pack(&self) -> Result<Vec<u8>, NodeError> {
         let mut buf = Vec::with_capacity(MESSAGE_BUF_DEFAULT_CAPACITY);
 
         serde::Serialize::serialize(&self, &mut rmp_serde::Serializer::new(&mut buf))?;

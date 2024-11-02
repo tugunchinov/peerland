@@ -53,10 +53,10 @@ impl Node {
 
     pub(crate) async fn send_message(
         &self,
-        msg: Message,
+        msg: &Message,
         to: impl ToSocketAddrs,
     ) -> Result<(), NodeError> {
-        self.socket.send_to(&msg.pack()?, to).await?;
+        self.socket.send_to(msg.pack()?.as_slice(), to).await?;
 
         Ok(())
     }
@@ -72,17 +72,16 @@ impl Node {
         Ok(msg)
     }
 
-    pub async fn list_known_nodes(&self) -> Result<Vec<impl ToSocketAddrs>, NodeError> {
-        // TODO: make discovery service
-        let node_1_address = "127.0.0.1:59875";
-        let node_2_address = "127.0.0.2:59876";
-        //let node_3_address = "0.0.0.0:59878";
-
-        Ok(vec![node_1_address, node_2_address])
-    }
-
     pub(crate) async fn register_node(&self, addr: SocketAddr) -> Result<(), NodeError> {
         self.known_nodes.lock().await.push(addr);
+
+        Ok(())
+    }
+
+    pub(crate) async fn broadcast_message(&self, message: Message) -> Result<(), NodeError> {
+        for addr in self.known_nodes.lock().await.iter() {
+            self.send_message(&message, addr).await?;
+        }
 
         Ok(())
     }

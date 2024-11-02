@@ -4,7 +4,7 @@ pub type UdpSocket = tokio::net::UdpSocket;
 pub type UdpSocket = turmoil::net::UdpSocket;
 
 #[cfg(not(feature = "simulation"))]
-pub type SocketAddr = tokio::net::unix::SocketAddr;
+pub type SocketAddr = std::net::SocketAddr;
 #[cfg(feature = "simulation")]
 pub type SocketAddr = turmoil::net::SocketAddr;
 
