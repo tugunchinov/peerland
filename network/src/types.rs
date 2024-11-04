@@ -3,10 +3,7 @@ pub type UdpSocket = tokio::net::UdpSocket;
 #[cfg(feature = "simulation")]
 pub type UdpSocket = turmoil::net::UdpSocket;
 
-#[cfg(not(feature = "simulation"))]
 pub type SocketAddr = std::net::SocketAddr;
-#[cfg(feature = "simulation")]
-pub type SocketAddr = turmoil::net::SocketAddr;
 
 #[cfg(not(feature = "simulation"))]
 pub type TcpListener = tokio::net::TcpListener;

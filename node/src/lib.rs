@@ -72,15 +72,19 @@ impl Node {
         Ok(msg)
     }
 
-    pub(crate) async fn register_node(&self, addr: SocketAddr) -> Result<(), NodeError> {
+    pub(crate) async fn notify_other(&self, other: impl ToSocketAddrs) -> Result<(), NodeError> {
+        self.send_message(&Message::new_notify(), other).await
+    }
+
+    async fn register_node(&self, addr: SocketAddr) -> Result<(), NodeError> {
         self.known_nodes.lock().await.push(addr);
 
         Ok(())
     }
 
-    pub(crate) async fn broadcast_message(&self, message: Message) -> Result<(), NodeError> {
+    pub(crate) async fn broadcast_message(&self, message: &Message) -> Result<(), NodeError> {
         for addr in self.known_nodes.lock().await.iter() {
-            self.send_message(&message, addr).await?;
+            self.send_message(message, addr).await?;
         }
 
         Ok(())
@@ -106,7 +110,6 @@ impl Node {
 #[cfg(test)]
 #[cfg(feature = "simulation")]
 pub mod tests {
-    use crate::message::Message;
     use crate::Node;
     use network::turmoil;
     use std::net::{IpAddr, Ipv4Addr};
@@ -127,8 +130,6 @@ pub mod tests {
                 .await
                 .unwrap();
 
-            node.pending_forever().await;
-
             Ok(())
         });
 
@@ -137,9 +138,17 @@ pub mod tests {
                 .await
                 .unwrap();
 
-            node.send_message(Message::new(42), ("node_1", 9000))
+            node.pending_forever().await;
+
+            Ok(())
+        });
+
+        matrix.host("node_3", || async {
+            let node = Node::new((IpAddr::from(Ipv4Addr::UNSPECIFIED), 9000))
                 .await
                 .unwrap();
+
+            node.pending_forever().await;
 
             Ok(())
         });
