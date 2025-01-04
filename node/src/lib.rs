@@ -1,16 +1,19 @@
 mod error;
 mod proto;
+pub(crate) mod sync;
+mod time;
 
 use crate::error::NodeError;
+use crate::time::{LamportClock, LamportClockUnit, LogicalTimeProvider, SystemTimeProvider};
 use network::types::*;
 use prost::Message;
-use proto::message::{node_message, NodeMessage};
+use proto::message::NodeMessage;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 
-pub struct Node {
-    name: String,
+pub struct Node<T: SystemTimeProvider> {
+    id: u8,
 
     socket: TcpListener,
 
@@ -19,20 +22,28 @@ pub struct Node {
 
     // TODO: better
     known_nodes: Mutex<Vec<SocketAddr>>,
+
+    time_provider: T,
+    logical_time_provider: LamportClock,
 }
 
-impl Node {
-    pub async fn new<S: AsRef<str>>(
+impl<T: SystemTimeProvider> Node<T> {
+    pub async fn new(
+        id: u8,
         addr: impl ToSocketAddrs,
-        name: S,
+        time_provider: T,
     ) -> Result<Arc<Self>, NodeError> {
         let socket = TcpListener::bind(addr).await?;
 
+        let logical_time_provider = LamportClock::new(id);
+
         let node = Arc::new(Self {
-            name: name.as_ref().to_string(),
+            id,
             socket,
             storage: Mutex::new(vec![]),
             known_nodes: Mutex::new(vec![]),
+            time_provider,
+            logical_time_provider,
         });
 
         {
@@ -48,7 +59,11 @@ impl Node {
         loop {
             match self.recv_message().await {
                 Ok(msg) => {
-                    tracing::info!(message = ?msg, "received message");
+                    tracing::info!(
+                        now = ?self.get_current_ts(),
+                        msg_ts = ?msg.ts,
+                        "received message"
+                    );
                     self.storage.lock().await.push(msg);
                 }
                 Err(e) => {
@@ -61,9 +76,12 @@ impl Node {
 
     pub(crate) async fn send_message(
         &self,
-        msg: &NodeMessage,
+        mut msg: NodeMessage,
         to: impl ToSocketAddrs,
     ) -> Result<(), NodeError> {
+        let ts = self.get_current_ts();
+        tracing::info!(timestamp = ?ts, "sending message");
+        msg.ts = Some(ts);
         let serialized_msg = msg.encode_to_vec();
         let mut stream = TcpStream::connect(to).await?;
         stream.write_all(&serialized_msg).await?;
@@ -72,25 +90,21 @@ impl Node {
 
     async fn recv_message(&self) -> Result<NodeMessage, NodeError> {
         const MAX_MSG_SIZE_BYTES: usize = 8 * 1024;
-
         let mut buf = Vec::with_capacity(MAX_MSG_SIZE_BYTES);
-        let (mut stream, addr) = self.socket.accept().await?;
-        tracing::info!(node = ?self.name, from = ?addr, "received new message");
-
+        let (mut stream, _addr) = self.socket.accept().await?;
         loop {
             let bytes_read = stream.read_buf(&mut buf).await?;
             if bytes_read == 0 {
                 break;
             }
-            tracing::trace!(bytes_read = ?bytes_read, buffer_len = ?buf.len());
+            tracing::info!(bytes_read = ?bytes_read, buffer_len = ?buf.len());
         }
 
         let deserialized_msg = NodeMessage::decode(buf.as_slice())?;
-
         Ok(deserialized_msg)
     }
 
-    pub(crate) async fn notify_other(&self, other: impl ToSocketAddrs) -> Result<(), NodeError> {
+    pub(crate) async fn notify_other(&self, _other: impl ToSocketAddrs) -> Result<(), NodeError> {
         //self.send_message(&Message::new_notify(), other).await
         todo!()
     }
@@ -101,9 +115,9 @@ impl Node {
         Ok(())
     }
 
-    pub(crate) async fn broadcast_message(&self, message: &NodeMessage) -> Result<(), NodeError> {
+    pub(crate) async fn broadcast_message(&self, msg: NodeMessage) -> Result<(), NodeError> {
         for addr in self.known_nodes.lock().await.iter() {
-            self.send_message(message, addr).await?;
+            self.send_message(msg.clone(), addr).await?;
         }
 
         Ok(())
@@ -114,6 +128,20 @@ impl Node {
         my_value: NodeMessage,
     ) -> Result<NodeMessage, NodeError> {
         Ok(my_value)
+    }
+
+    fn get_current_ts(&self) -> prost_types::Timestamp {
+        let millis = self.time_provider.now_millis();
+
+        prost_types::Timestamp {
+            seconds: (millis / 1000) as i64,
+            nanos: ((millis % 1000) * 1000000) as i32,
+        }
+    }
+
+    // TODO: use trait insteat
+    fn get_next_lt(&self) -> LamportClockUnit {
+        self.logical_time_provider.next_timestamp()
     }
 
     // TODO: remove
@@ -130,13 +158,19 @@ impl Node {
 #[cfg(test)]
 pub mod tests {
     use crate::proto::message::{node_message, NodeMessage};
+    use crate::time::BrokenUnixTimeProvider;
     use crate::{proto, Node};
     use network::turmoil;
     use std::net::{IpAddr, Ipv4Addr};
 
     #[test]
     pub fn test() {
-        let mut matrix = turmoil::Builder::new().build();
+        use rand::SeedableRng;
+
+        let rng = rand::rngs::StdRng::seed_from_u64(35353);
+        let boxed_rng = Box::new(rng.clone());
+
+        let mut matrix = turmoil::Builder::new().build_with_rng(boxed_rng);
 
         tracing::subscriber::set_global_default(
             tracing_subscriber::fmt()
@@ -145,47 +179,90 @@ pub mod tests {
         )
         .expect("Configure tracing");
 
-        matrix.host("node_1", || async {
-            let node = Node::new((IpAddr::from(Ipv4Addr::UNSPECIFIED), 9000), "node_1")
-                .await
-                .unwrap();
+        {
+            let rng = rng.clone();
 
-            let msg = NodeMessage {
-                id: Some(proto::message::Uuid {
-                    value: uuid::Uuid::new_v4().into(),
-                }),
-                kind: node_message::MessageKind::Ordinary as i32,
-                data: "hello, world".into(),
-            };
+            matrix.host("node_1", move || {
+                let rng = rng.clone();
 
-            let node_2_addr = ("node_2", 9000);
-            let node_3_addr = ("node_3", 9000);
+                async move {
+                    let time_provider = BrokenUnixTimeProvider::new(rng);
 
-            node.send_message(&msg, node_2_addr).await.unwrap();
-            node.send_message(&msg, node_3_addr).await.unwrap();
+                    let node = Node::new(
+                        1,
+                        (IpAddr::from(Ipv4Addr::UNSPECIFIED), 9000),
+                        time_provider,
+                    )
+                    .await
+                    .unwrap();
 
-            Ok(())
-        });
+                    let msg = NodeMessage {
+                        id: Some(proto::message::Uuid {
+                            value: uuid::Uuid::new_v4().into(),
+                        }),
+                        kind: node_message::MessageKind::Ordinary as i32,
+                        ts: None,
+                        // TODO:
+                        lt: 0,
+                        data: "hello, world".into(),
+                    };
 
-        matrix.host("node_2", || async {
-            let node = Node::new((IpAddr::from(Ipv4Addr::UNSPECIFIED), 9000), "node_2")
-                .await
-                .unwrap();
+                    let node_2_addr = ("node_2", 9000);
+                    let node_3_addr = ("node_3", 9000);
 
-            node.pending_forever().await;
+                    node.send_message(msg.clone(), node_2_addr).await.unwrap();
+                    node.send_message(msg.clone(), node_3_addr).await.unwrap();
 
-            Ok(())
-        });
+                    Ok(())
+                }
+            });
+        }
 
-        matrix.host("node_3", || async {
-            let node = Node::new((IpAddr::from(Ipv4Addr::UNSPECIFIED), 9000), "node_3")
-                .await
-                .unwrap();
+        {
+            let rng = rng.clone();
 
-            node.pending_forever().await;
+            matrix.host("node_2", move || {
+                let rng = rng.clone();
+                async move {
+                    let time_provider = BrokenUnixTimeProvider::new(rng);
 
-            Ok(())
-        });
+                    let node = Node::new(
+                        2,
+                        (IpAddr::from(Ipv4Addr::UNSPECIFIED), 9000),
+                        time_provider,
+                    )
+                    .await
+                    .unwrap();
+
+                    node.pending_forever().await;
+
+                    Ok(())
+                }
+            });
+        }
+
+        {
+            let rng = rng.clone();
+
+            matrix.host("node_3", move || {
+                let rng = rng.clone();
+                async move {
+                    let time_provider = BrokenUnixTimeProvider::new(rng);
+
+                    let node = Node::new(
+                        3,
+                        (IpAddr::from(Ipv4Addr::UNSPECIFIED), 9000),
+                        time_provider,
+                    )
+                    .await
+                    .unwrap();
+
+                    node.pending_forever().await;
+
+                    Ok(())
+                }
+            });
+        }
 
         for _ in 0..=100 {
             matrix.step().unwrap();

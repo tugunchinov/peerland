@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package message;
 
+import "google/protobuf/timestamp.proto";
+
 message Uuid {
     bytes value = 1;
 }
@@ -14,5 +16,7 @@ message NodeMessage {
 
     Uuid id = 1;
     MessageKind kind = 2;
-    bytes data = 3;
+    google.protobuf.Timestamp ts = 3;
+    uint64 lt = 4;
+    bytes data = 5;
 }
