@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package message;
+
+message Uuid {
+    bytes value = 1;
+}
+
+message NodeMessage {
+    enum MessageKind {
+        ORDINARY = 0;
+        NOTIFY = 1;
+    }
+
+    Uuid id = 1;
+    MessageKind kind = 2;
+    bytes data = 3;
+}

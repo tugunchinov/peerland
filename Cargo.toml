@@ -9,9 +9,6 @@ tokio = { version = "1.41.0", features = ["rt-multi-thread", "macros"] }
 [dependencies.node]
 path = "./node"
 
-[dependencies.runtime]
-path = "./runtime"
-
 [dev-dependencies.cargo-husky]
 version = "1.5.0"
 features = ["run-cargo-check", "run-cargo-clippy", "run-cargo-fmt"]
