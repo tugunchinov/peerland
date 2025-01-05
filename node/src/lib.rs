@@ -1,10 +1,11 @@
 mod error;
 mod proto;
-pub(crate) mod sync;
+mod sync;
 mod time;
 
 use crate::error::NodeError;
-use crate::time::{LamportClock, LamportClockUnit, LogicalTimeProvider, SystemTimeProvider};
+use crate::proto::*;
+use crate::time::*;
 use network::types::*;
 use prost::Message;
 use proto::message::NodeMessage;
@@ -13,7 +14,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 
 pub struct Node<T: SystemTimeProvider> {
-    id: u8,
+    id: u32,
 
     socket: TcpListener,
 
@@ -23,13 +24,13 @@ pub struct Node<T: SystemTimeProvider> {
     // TODO: better
     known_nodes: Mutex<Vec<SocketAddr>>,
 
-    time_provider: T,
+    system_time_provider: T,
     logical_time_provider: LamportClock,
 }
 
 impl<T: SystemTimeProvider> Node<T> {
     pub async fn new(
-        id: u8,
+        id: u32,
         addr: impl ToSocketAddrs,
         time_provider: T,
     ) -> Result<Arc<Self>, NodeError> {
@@ -42,7 +43,7 @@ impl<T: SystemTimeProvider> Node<T> {
             socket,
             storage: Mutex::new(vec![]),
             known_nodes: Mutex::new(vec![]),
-            time_provider,
+            system_time_provider: time_provider,
             logical_time_provider,
         });
 
@@ -59,8 +60,9 @@ impl<T: SystemTimeProvider> Node<T> {
         loop {
             match self.recv_message().await {
                 Ok(msg) => {
+                    let now: prost_types::Timestamp = self.system_time_provider.now_millis().into();
                     tracing::info!(
-                        now = ?self.get_current_ts(),
+                        now = ?now,
                         msg_ts = ?msg.ts,
                         "received message"
                     );
@@ -74,14 +76,26 @@ impl<T: SystemTimeProvider> Node<T> {
         }
     }
 
-    pub(crate) async fn send_message(
+    pub(crate) async fn send_message<B: AsRef<[u8]>>(
         &self,
-        mut msg: NodeMessage,
+        msg: B,
         to: impl ToSocketAddrs,
     ) -> Result<(), NodeError> {
-        let ts = self.get_current_ts();
+        let ts = self.system_time_provider.now_millis().into();
         tracing::info!(timestamp = ?ts, "sending message");
-        msg.ts = Some(ts);
+
+        let msg = NodeMessage {
+            id: Some(message::Uuid {
+                value: uuid::Uuid::new_v4().into(),
+            }),
+            kind: message::node_message::MessageKind::Ordinary as i32,
+            ts: Some(ts),
+            lt: Some(message::node_message::Lt::LamportClock(
+                self.logical_time_provider.next_timestamp().into(),
+            )),
+            data: msg.as_ref().to_vec(),
+        };
+
         let serialized_msg = msg.encode_to_vec();
         let mut stream = TcpStream::connect(to).await?;
         stream.write_all(&serialized_msg).await?;
@@ -104,21 +118,8 @@ impl<T: SystemTimeProvider> Node<T> {
         Ok(deserialized_msg)
     }
 
-    pub(crate) async fn notify_other(&self, _other: impl ToSocketAddrs) -> Result<(), NodeError> {
-        //self.send_message(&Message::new_notify(), other).await
-        todo!()
-    }
-
     async fn register_node(&self, addr: SocketAddr) -> Result<(), NodeError> {
         self.known_nodes.lock().await.push(addr);
-
-        Ok(())
-    }
-
-    pub(crate) async fn broadcast_message(&self, msg: NodeMessage) -> Result<(), NodeError> {
-        for addr in self.known_nodes.lock().await.iter() {
-            self.send_message(msg.clone(), addr).await?;
-        }
 
         Ok(())
     }
@@ -130,16 +131,7 @@ impl<T: SystemTimeProvider> Node<T> {
         Ok(my_value)
     }
 
-    fn get_current_ts(&self) -> prost_types::Timestamp {
-        let millis = self.time_provider.now_millis();
-
-        prost_types::Timestamp {
-            seconds: (millis / 1000) as i64,
-            nanos: ((millis % 1000) * 1000000) as i32,
-        }
-    }
-
-    // TODO: use trait insteat
+    // TODO: use trait instead
     fn get_next_lt(&self) -> LamportClockUnit {
         self.logical_time_provider.next_timestamp()
     }
@@ -157,9 +149,8 @@ impl<T: SystemTimeProvider> Node<T> {
 #[cfg(feature = "simulation")]
 #[cfg(test)]
 pub mod tests {
-    use crate::proto::message::{node_message, NodeMessage};
     use crate::time::BrokenUnixTimeProvider;
-    use crate::{proto, Node};
+    use crate::Node;
     use network::turmoil;
     use std::net::{IpAddr, Ipv4Addr};
 
@@ -196,22 +187,15 @@ pub mod tests {
                     .await
                     .unwrap();
 
-                    let msg = NodeMessage {
-                        id: Some(proto::message::Uuid {
-                            value: uuid::Uuid::new_v4().into(),
-                        }),
-                        kind: node_message::MessageKind::Ordinary as i32,
-                        ts: None,
-                        // TODO:
-                        lt: 0,
-                        data: "hello, world".into(),
-                    };
-
                     let node_2_addr = ("node_2", 9000);
                     let node_3_addr = ("node_3", 9000);
 
-                    node.send_message(msg.clone(), node_2_addr).await.unwrap();
-                    node.send_message(msg.clone(), node_3_addr).await.unwrap();
+                    node.send_message("hello, world!", node_2_addr)
+                        .await
+                        .unwrap();
+                    node.send_message("hello, world!", node_3_addr)
+                        .await
+                        .unwrap();
 
                     Ok(())
                 }

@@ -3,10 +3,20 @@ use rand::Rng;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
-pub trait SystemTimeProvider: Send + Sync + 'static {
-    fn now_millis(&self) -> u128;
+#[derive(Clone, Debug, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Millis(pub u128);
+
+impl From<u128> for Millis {
+    fn from(val: u128) -> Self {
+        Self(val)
+    }
 }
 
+pub trait SystemTimeProvider: Send + Sync + 'static {
+    fn now_millis(&self) -> Millis;
+}
+
+// TODO: move to tests
 pub(crate) struct BrokenUnixTimeProvider<R: Rng> {
     start_time: SystemTime,
     last_ts: AtomicU64,
@@ -29,7 +39,7 @@ impl<R: Rng + Send + 'static> BrokenUnixTimeProvider<R> {
 }
 
 impl<R: Rng + Send + 'static> SystemTimeProvider for BrokenUnixTimeProvider<R> {
-    fn now_millis(&self) -> u128 {
+    fn now_millis(&self) -> Millis {
         let mut rng_guard = self.rng.lock();
         let run_faster = rng_guard.gen_bool(0.5);
         let run_slower = rng_guard.gen_bool(0.5);
@@ -40,7 +50,7 @@ impl<R: Rng + Send + 'static> SystemTimeProvider for BrokenUnixTimeProvider<R> {
         let mut last_ts = self.last_ts.load(Ordering::Relaxed);
         loop {
             if now < last_ts {
-                return last_ts as u128;
+                return (last_ts as u128).into();
             }
 
             if run_faster {
@@ -64,7 +74,7 @@ impl<R: Rng + Send + 'static> SystemTimeProvider for BrokenUnixTimeProvider<R> {
             }
         }
 
-        now as u128
+        (now as u128).into()
     }
 }
 
@@ -75,14 +85,15 @@ pub trait LogicalTimeProvider: Send + Sync + 'static {
 
 pub(crate) struct LamportClock {
     /// Must be unique. Otherwise, there isn't the guarantee about strong monotonicity.
-    id: u8,
+    id: u32,
     counter: AtomicU64,
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub(crate) struct LamportClockUnit((u64, u8));
+pub(crate) struct LamportClockUnit(pub(crate) (u64, u32));
 
 // TODO: check if it's correct
+// TODO: if debug -> log to buffer
 impl LogicalTimeProvider for LamportClock {
     type Unit = LamportClockUnit;
 
@@ -93,7 +104,7 @@ impl LogicalTimeProvider for LamportClock {
 }
 
 impl LamportClock {
-    pub fn new(id: u8) -> Self {
+    pub fn new(id: u32) -> Self {
         Self {
             id,
             counter: AtomicU64::new(0),
