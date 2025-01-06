@@ -4,6 +4,7 @@ mod sync;
 mod time;
 
 use crate::error::NodeError;
+use crate::proto::message::node_message;
 use crate::proto::*;
 use crate::time::*;
 use network::types::*;
@@ -16,6 +17,7 @@ use tokio::sync::Mutex;
 pub struct Node<T: SystemTimeProvider> {
     id: u32,
 
+    // TODO: use custom protocol over UDP?
     socket: TcpListener,
 
     // TODO: make service
@@ -25,6 +27,7 @@ pub struct Node<T: SystemTimeProvider> {
     known_nodes: Mutex<Vec<SocketAddr>>,
 
     system_time_provider: T,
+    // TODO: use trait
     logical_time_provider: LamportClock,
 }
 
@@ -64,8 +67,14 @@ impl<T: SystemTimeProvider> Node<T> {
                     tracing::info!(
                         now = ?now,
                         msg_ts = ?msg.ts,
+                        msg_lt = ?msg.lt,
                         "received message"
                     );
+                    if let Some(node_message::Lt::LamportClock(msg_lt)) = msg.lt {
+                        self.logical_time_provider.adjust_timestamp(msg_lt.lt)
+                    } else {
+                        tracing::warn!(msg_lt = ?msg.lt, "unknown logical time format");
+                    }
                     self.storage.lock().await.push(msg);
                 }
                 Err(e) => {
@@ -111,34 +120,10 @@ impl<T: SystemTimeProvider> Node<T> {
             if bytes_read == 0 {
                 break;
             }
-            tracing::info!(bytes_read = ?bytes_read, buffer_len = ?buf.len());
         }
 
         let deserialized_msg = NodeMessage::decode(buf.as_slice())?;
         Ok(deserialized_msg)
-    }
-
-    async fn register_node(&self, addr: SocketAddr) -> Result<(), NodeError> {
-        self.known_nodes.lock().await.push(addr);
-
-        Ok(())
-    }
-
-    pub(crate) async fn choose_consensus_value(
-        &self,
-        my_value: NodeMessage,
-    ) -> Result<NodeMessage, NodeError> {
-        Ok(my_value)
-    }
-
-    // TODO: use trait instead
-    fn get_next_lt(&self) -> LamportClockUnit {
-        self.logical_time_provider.next_timestamp()
-    }
-
-    // TODO: remove
-    async fn get_log(&self) -> Vec<NodeMessage> {
-        self.storage.lock().await.clone()
     }
 
     pub async fn pending_forever(&self) {
@@ -152,7 +137,10 @@ pub mod tests {
     use crate::time::BrokenUnixTimeProvider;
     use crate::Node;
     use network::turmoil;
+    use rand::prelude::SliceRandom;
+    use std::future::Future;
     use std::net::{IpAddr, Ipv4Addr};
+    use std::pin::Pin;
 
     #[test]
     pub fn test() {
@@ -170,88 +158,74 @@ pub mod tests {
         )
         .expect("Configure tracing");
 
-        {
-            let rng = rng.clone();
+        let node_names = ["node_1", "node_2", "node_3"];
 
-            matrix.host("node_1", move || {
-                let rng = rng.clone();
-
-                async move {
-                    let time_provider = BrokenUnixTimeProvider::new(rng);
-
-                    let node = Node::new(
-                        1,
-                        (IpAddr::from(Ipv4Addr::UNSPECIFIED), 9000),
-                        time_provider,
-                    )
-                    .await
-                    .unwrap();
-
-                    let node_2_addr = ("node_2", 9000);
-                    let node_3_addr = ("node_3", 9000);
-
-                    node.send_message("hello, world!", node_2_addr)
-                        .await
-                        .unwrap();
-                    node.send_message("hello, world!", node_3_addr)
-                        .await
-                        .unwrap();
-
-                    Ok(())
-                }
-            });
+        for (i, node_name) in node_names.iter().enumerate() {
+            matrix.host(
+                *node_name,
+                configure_node(node_names.to_vec(), i, rng.clone(), 100),
+            );
         }
 
-        {
-            let rng = rng.clone();
-
-            matrix.host("node_2", move || {
-                let rng = rng.clone();
-                async move {
-                    let time_provider = BrokenUnixTimeProvider::new(rng);
-
-                    let node = Node::new(
-                        2,
-                        (IpAddr::from(Ipv4Addr::UNSPECIFIED), 9000),
-                        time_provider,
-                    )
-                    .await
-                    .unwrap();
-
-                    node.pending_forever().await;
-
-                    Ok(())
-                }
-            });
-        }
-
-        {
-            let rng = rng.clone();
-
-            matrix.host("node_3", move || {
-                let rng = rng.clone();
-                async move {
-                    let time_provider = BrokenUnixTimeProvider::new(rng);
-
-                    let node = Node::new(
-                        3,
-                        (IpAddr::from(Ipv4Addr::UNSPECIFIED), 9000),
-                        time_provider,
-                    )
-                    .await
-                    .unwrap();
-
-                    node.pending_forever().await;
-
-                    Ok(())
-                }
-            });
-        }
-
-        for _ in 0..=100 {
+        for _ in 0..=100_000 {
             matrix.step().unwrap();
         }
 
         matrix.run().unwrap();
+    }
+
+    fn configure_node<S: AsRef<str>, T: rand::Rng + Clone + Send + 'static>(
+        nodes_name: Vec<S>,
+        node_idx: usize,
+        rng: T,
+        spam_msg_cnt: u64,
+    ) -> impl Fn() -> Pin<Box<dyn Future<Output = turmoil::Result>>> {
+        move || {
+            let mut rng = rng.clone();
+
+            let mut other_nodes = Vec::with_capacity(nodes_name.len());
+            for (i, node_name) in nodes_name.iter().enumerate() {
+                if i != node_idx {
+                    other_nodes.push((node_name.as_ref().to_string(), 9000));
+                }
+            }
+
+            Box::pin(async move {
+                let time_provider = BrokenUnixTimeProvider::new(rng.clone());
+
+                let node = Node::new(
+                    node_idx as u32,
+                    (IpAddr::from(Ipv4Addr::UNSPECIFIED), 9000),
+                    time_provider,
+                )
+                .await
+                .unwrap();
+
+                // start spaming
+                for i in 0..spam_msg_cnt {
+                    let msg = format!("hello from {node_idx}: {i}");
+
+                    let recipients_cnt = (rand::random::<usize>() % other_nodes.len()).max(1);
+
+                    tracing::info!(
+                        spam_msg_cnt = ?spam_msg_cnt,
+                        recipients_cnt = %recipients_cnt,
+                        "starting spaming"
+                    );
+
+                    for _ in 0..recipients_cnt {
+                        let recipient = other_nodes.choose(&mut rng).unwrap();
+
+                        node.send_message(&msg, recipient).await.unwrap();
+                    }
+                }
+
+                tracing::warn!("finished spaming. pending forever...");
+
+                node.pending_forever().await;
+
+                Ok(())
+            })
+        }
     }
 }

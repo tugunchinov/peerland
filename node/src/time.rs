@@ -87,19 +87,46 @@ pub(crate) struct LamportClock {
     /// Must be unique. Otherwise, there isn't the guarantee about strong monotonicity.
     id: u32,
     counter: AtomicU64,
+
+    #[cfg(debug_assertions)]
+    lt_logs: SpinLock<Vec<LamportClockUnit>>,
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub(crate) struct LamportClockUnit(pub(crate) (u64, u32));
 
 // TODO: check if it's correct
-// TODO: if debug -> log to buffer
 impl LogicalTimeProvider for LamportClock {
     type Unit = LamportClockUnit;
 
     fn next_timestamp(&self) -> Self::Unit {
+        let maybe_log_lock = if cfg!(debug_assertions) {
+            Some(self.lt_logs.lock())
+        } else {
+            None
+        };
+
         let lt = self.counter.fetch_add(1, Ordering::Acquire);
-        LamportClockUnit((lt, self.id))
+        let unit = LamportClockUnit((lt, self.id));
+
+        if cfg!(debug_assertions) {
+            let mut log_lock = maybe_log_lock.unwrap();
+
+            if !log_lock.is_empty() {
+                let last = log_lock.last().unwrap();
+
+                assert!(
+                    last < &unit,
+                    "logical time reverted: last: {:?}, current: {:?}",
+                    last,
+                    &unit,
+                );
+            }
+
+            log_lock.push(unit);
+        }
+
+        unit
     }
 }
 
@@ -108,6 +135,9 @@ impl LamportClock {
         Self {
             id,
             counter: AtomicU64::new(0),
+
+            #[cfg(debug_assertions)]
+            lt_logs: SpinLock::new(Vec::with_capacity(1024)),
         }
     }
 
@@ -132,6 +162,20 @@ impl LamportClock {
                     }
                 }
             }
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn ensure_lt_order(&self) {
+        let logs_guard = self.lt_logs.lock();
+
+        let Some(mut current_lt) = logs_guard.first() else {
+            return;
+        };
+
+        for lt in logs_guard.iter().skip(1) {
+            assert!(current_lt < lt, "logical time order reversed");
+            current_lt = lt;
         }
     }
 }
