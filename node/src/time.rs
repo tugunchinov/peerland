@@ -81,6 +81,7 @@ impl<R: Rng + Send + 'static> SystemTimeProvider for BrokenUnixTimeProvider<R> {
 pub trait LogicalTimeProvider: Send + Sync + 'static {
     type Unit: Ord;
     fn next_timestamp(&self) -> Self::Unit;
+    fn adjust_timestamp(&self, timestamp: Self::Unit);
 }
 
 pub(crate) struct LamportClock {
@@ -128,6 +129,34 @@ impl LogicalTimeProvider for LamportClock {
 
         unit
     }
+
+    fn adjust_timestamp(&self, ts: Self::Unit) {
+        let mut current = self.counter.load(Ordering::Acquire);
+        let ts_millis = ts.0 .0;
+
+        if ts_millis > current {
+            loop {
+                match self.counter.compare_exchange_weak(
+                    current,
+                    ts_millis,
+                    Ordering::Release,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => {
+                        tracing::warn!("timestamp adjusted: {current} -> {ts_millis}");
+                        break;
+                    }
+                    Err(actual) => {
+                        current = actual;
+
+                        if current >= ts_millis {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl LamportClock {
@@ -138,44 +167,6 @@ impl LamportClock {
 
             #[cfg(debug_assertions)]
             lt_logs: SpinLock::new(Vec::with_capacity(1024)),
-        }
-    }
-
-    pub fn adjust_timestamp(&self, ts: u64) {
-        let mut current = self.counter.load(Ordering::Acquire);
-
-        if ts > current {
-            loop {
-                match self.counter.compare_exchange_weak(
-                    current,
-                    ts,
-                    Ordering::Release,
-                    Ordering::Acquire,
-                ) {
-                    Ok(_) => break,
-                    Err(actual) => {
-                        current = actual;
-
-                        if current >= ts {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    #[cfg(debug_assertions)]
-    pub fn ensure_lt_order(&self) {
-        let logs_guard = self.lt_logs.lock();
-
-        let Some(mut current_lt) = logs_guard.first() else {
-            return;
-        };
-
-        for lt in logs_guard.iter().skip(1) {
-            assert!(current_lt < lt, "logical time order reversed");
-            current_lt = lt;
         }
     }
 }

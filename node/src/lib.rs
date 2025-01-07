@@ -4,9 +4,6 @@ mod sync;
 mod time;
 
 use crate::error::NodeError;
-use crate::proto::message::node_message;
-use crate::proto::*;
-use crate::time::*;
 use network::types::*;
 use prost::Message;
 use proto::message::NodeMessage;
@@ -14,9 +11,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 
-pub struct Node<T: SystemTimeProvider> {
-    id: u32,
-
+pub struct Node<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider> {
     // TODO: use custom protocol over UDP?
     socket: TcpListener,
 
@@ -26,23 +21,20 @@ pub struct Node<T: SystemTimeProvider> {
     // TODO: better
     known_nodes: Mutex<Vec<SocketAddr>>,
 
-    system_time_provider: T,
+    system_time_provider: ST,
     // TODO: use trait
-    logical_time_provider: LamportClock,
+    logical_time_provider: LT,
 }
 
-impl<T: SystemTimeProvider> Node<T> {
+impl<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider> Node<ST, LT> {
     pub async fn new(
-        id: u32,
         addr: impl ToSocketAddrs,
-        time_provider: T,
+        time_provider: ST,
+        logical_time_provider: LT,
     ) -> Result<Arc<Self>, NodeError> {
         let socket = TcpListener::bind(addr).await?;
 
-        let logical_time_provider = LamportClock::new(id);
-
         let node = Arc::new(Self {
-            id,
             socket,
             storage: Mutex::new(vec![]),
             known_nodes: Mutex::new(vec![]),
@@ -70,8 +62,9 @@ impl<T: SystemTimeProvider> Node<T> {
                         msg_lt = ?msg.lt,
                         "received message"
                     );
-                    if let Some(node_message::Lt::LamportClock(msg_lt)) = msg.lt {
-                        self.logical_time_provider.adjust_timestamp(msg_lt.lt)
+
+                    if let Some(proto::message::node_message::Lt::LamportClock(msg_lt)) = msg.lt {
+                        self.logical_time_provider.adjust_timestamp(msg_lt.into());
                     } else {
                         tracing::warn!(msg_lt = ?msg.lt, "unknown logical time format");
                     }
@@ -94,12 +87,12 @@ impl<T: SystemTimeProvider> Node<T> {
         tracing::info!(timestamp = ?ts, "sending message");
 
         let msg = NodeMessage {
-            id: Some(message::Uuid {
+            id: Some(proto::message::Uuid {
                 value: uuid::Uuid::new_v4().into(),
             }),
-            kind: message::node_message::MessageKind::Ordinary as i32,
+            kind: proto::message::node_message::MessageKind::Ordinary as i32,
             ts: Some(ts),
-            lt: Some(message::node_message::Lt::LamportClock(
+            lt: Some(proto::message::node_message::Lt::LamportClock(
                 self.logical_time_provider.next_timestamp().into(),
             )),
             data: msg.as_ref().to_vec(),
