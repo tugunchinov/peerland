@@ -12,6 +12,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 
 pub struct Node<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider> {
+    id: u32,
+
     // TODO: use custom protocol over UDP?
     socket: TcpListener,
 
@@ -26,15 +28,23 @@ pub struct Node<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider> {
     logical_time_provider: LT,
 }
 
-impl<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider> Node<ST, LT> {
+impl<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider> Node<ST, LT>
+// TODO: move to separate mod for different logical clocks
+where
+    <LT as time::LogicalTimeProvider>::Unit: From<proto::logical_time::LamportClockUnit>,
+    proto::logical_time::LamportClockUnit: From<<LT as time::LogicalTimeProvider>::Unit>,
+{
     pub async fn new(
+        id: u32,
         addr: impl ToSocketAddrs,
         time_provider: ST,
-        logical_time_provider: LT,
     ) -> Result<Arc<Self>, NodeError> {
         let socket = TcpListener::bind(addr).await?;
 
+        let logical_time_provider = LT::new_with_id(id);
+
         let node = Arc::new(Self {
+            id,
             socket,
             storage: Mutex::new(vec![]),
             known_nodes: Mutex::new(vec![]),
@@ -128,7 +138,7 @@ impl<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider> Node<ST, LT> {
 #[cfg(test)]
 pub mod tests {
     use crate::time::BrokenUnixTimeProvider;
-    use crate::Node;
+    use crate::{time, Node};
     use network::turmoil;
     use rand::prelude::SliceRandom;
     use std::future::Future;
@@ -156,7 +166,12 @@ pub mod tests {
         for (i, node_name) in node_names.iter().enumerate() {
             matrix.host(
                 *node_name,
-                configure_node(node_names.to_vec(), i, rng.clone(), 100),
+                configure_node::<_, _, time::LamportClock>(
+                    node_names.to_vec(),
+                    i,
+                    rng.clone(),
+                    100,
+                ),
             );
         }
 
@@ -167,7 +182,11 @@ pub mod tests {
         matrix.run().unwrap();
     }
 
-    fn configure_node<S: AsRef<str>, T: rand::Rng + Clone + Send + 'static>(
+    fn configure_node<
+        S: AsRef<str>,
+        T: rand::Rng + Clone + Send + 'static,
+        LT: time::LogicalTimeProvider,
+    >(
         nodes_name: Vec<S>,
         node_idx: usize,
         rng: T,
@@ -186,7 +205,7 @@ pub mod tests {
             Box::pin(async move {
                 let time_provider = BrokenUnixTimeProvider::new(rng.clone());
 
-                let node = Node::new(
+                let node = Node::<_, LT>::new(
                     node_idx as u32,
                     (IpAddr::from(Ipv4Addr::UNSPECIFIED), 9000),
                     time_provider,

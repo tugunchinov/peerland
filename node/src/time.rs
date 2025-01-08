@@ -80,6 +80,7 @@ impl<R: Rng + Send + 'static> SystemTimeProvider for BrokenUnixTimeProvider<R> {
 
 pub trait LogicalTimeProvider: Send + Sync + 'static {
     type Unit: Ord;
+    fn new_with_id(id: u32) -> Self;
     fn next_timestamp(&self) -> Self::Unit;
     fn adjust_timestamp(&self, timestamp: Self::Unit);
 }
@@ -99,6 +100,10 @@ pub(crate) struct LamportClockUnit(pub(crate) (u64, u32));
 // TODO: check if it's correct
 impl LogicalTimeProvider for LamportClock {
     type Unit = LamportClockUnit;
+
+    fn new_with_id(id: u32) -> Self {
+        Self::new(id)
+    }
 
     fn next_timestamp(&self) -> Self::Unit {
         let maybe_log_lock = if cfg!(debug_assertions) {
