@@ -11,7 +11,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 
-pub struct Node<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider> {
+pub(crate) struct Node<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider> {
     id: u32,
 
     // TODO: use custom protocol over UDP?
@@ -28,11 +28,11 @@ pub struct Node<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider> {
     logical_time_provider: LT,
 }
 
-impl<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider> Node<ST, LT>
-// TODO: move to separate mod for different logical clocks
-where
-    <LT as time::LogicalTimeProvider>::Unit: From<proto::logical_time::LamportClockUnit>,
-    proto::logical_time::LamportClockUnit: From<<LT as time::LogicalTimeProvider>::Unit>,
+// TODO: move to separate mod for different logical clocks && make it private
+impl<
+        ST: time::SystemTimeProvider,
+        LT: time::LogicalTimeProvider<Unit = time::LamportClockUnit>,
+    > Node<ST, LT>
 {
     pub async fn new(
         id: u32,
@@ -137,6 +137,7 @@ where
 #[cfg(feature = "simulation")]
 #[cfg(test)]
 pub mod tests {
+    use crate::proto::logical_time::LamportClockUnit;
     use crate::time::BrokenUnixTimeProvider;
     use crate::{time, Node};
     use network::turmoil;
@@ -185,7 +186,7 @@ pub mod tests {
     fn configure_node<
         S: AsRef<str>,
         T: rand::Rng + Clone + Send + 'static,
-        LT: time::LogicalTimeProvider,
+        LT: time::LogicalTimeProvider<Unit = time::LamportClockUnit>,
     >(
         nodes_name: Vec<S>,
         node_idx: usize,
