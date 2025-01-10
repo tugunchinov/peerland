@@ -1,12 +1,22 @@
+pub enum SerializationError {
+    Utf8Error(std::str::Utf8Error),
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum NodeError {
-    #[error("error")]
-    Error,
+    #[error("...")]
+    SerializationError {},
+    #[error("timed out: {0}")]
+    Timeout(#[from] tokio::time::error::Elapsed),
+    #[error("io error: {0:?}")]
+    IOError(std::io::Error),
+    #[error("unknown error: {0}")]
+    Unknown(String),
 }
 
 impl From<std::io::Error> for NodeError {
-    fn from(_value: std::io::Error) -> Self {
-        todo!()
+    fn from(value: std::io::Error) -> Self {
+        Self::IOError(value)
     }
 }
 

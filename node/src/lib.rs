@@ -3,6 +3,9 @@ mod proto;
 mod sync;
 mod time;
 
+#[cfg(test)]
+mod tests;
+
 use crate::error::NodeError;
 use network::types::*;
 use prost::Message;
@@ -82,7 +85,7 @@ impl<
                 }
                 Err(e) => {
                     tracing::error!(error = ?e, "failed receiving message");
-                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                    // tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
                 }
             }
         }
@@ -93,6 +96,9 @@ impl<
         msg: B,
         to: impl ToSocketAddrs,
     ) -> Result<(), NodeError> {
+        // TODO: from config
+        const TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(10);
+
         let ts = self.system_time_provider.now_millis().into();
         tracing::info!(timestamp = ?ts, "sending message");
 
@@ -107,10 +113,15 @@ impl<
             )),
             data: msg.as_ref().to_vec(),
         };
-
         let serialized_msg = msg.encode_to_vec();
-        let mut stream = TcpStream::connect(to).await?;
-        stream.write_all(&serialized_msg).await?;
+
+        let mut stream = tokio::time::timeout(TIMEOUT, TcpStream::connect(to)).await??;
+        tokio::time::timeout(
+            tokio::time::Duration::from_secs(10),
+            stream.write_all(&serialized_msg),
+        )
+        .await??;
+
         Ok(())
     }
 
@@ -127,118 +138,5 @@ impl<
 
         let deserialized_msg = NodeMessage::decode(buf.as_slice())?;
         Ok(deserialized_msg)
-    }
-
-    pub async fn pending_forever(&self) {
-        std::future::pending::<()>().await;
-    }
-}
-
-#[cfg(feature = "simulation")]
-#[cfg(test)]
-pub mod tests {
-    use crate::proto::logical_time::LamportClockUnit;
-    use crate::time::BrokenUnixTimeProvider;
-    use crate::{time, Node};
-    use network::turmoil;
-    use rand::prelude::SliceRandom;
-    use std::future::Future;
-    use std::net::{IpAddr, Ipv4Addr};
-    use std::pin::Pin;
-
-    #[test]
-    pub fn test() {
-        use rand::SeedableRng;
-
-        let rng = rand::rngs::StdRng::seed_from_u64(35353);
-        let boxed_rng = Box::new(rng.clone());
-
-        let mut matrix = turmoil::Builder::new().build_with_rng(boxed_rng);
-
-        tracing::subscriber::set_global_default(
-            tracing_subscriber::fmt()
-                .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-                .finish(),
-        )
-        .expect("Configure tracing");
-
-        let node_names = ["node_1", "node_2", "node_3"];
-
-        for (i, node_name) in node_names.iter().enumerate() {
-            matrix.host(
-                *node_name,
-                configure_node::<_, _, time::LamportClock>(
-                    node_names.to_vec(),
-                    i,
-                    rng.clone(),
-                    100,
-                ),
-            );
-        }
-
-        for _ in 0..=100_000 {
-            matrix.step().unwrap();
-        }
-
-        matrix.run().unwrap();
-    }
-
-    fn configure_node<
-        S: AsRef<str>,
-        T: rand::Rng + Clone + Send + 'static,
-        LT: time::LogicalTimeProvider<Unit = time::LamportClockUnit>,
-    >(
-        nodes_name: Vec<S>,
-        node_idx: usize,
-        rng: T,
-        spam_msg_cnt: u64,
-    ) -> impl Fn() -> Pin<Box<dyn Future<Output = turmoil::Result>>> {
-        move || {
-            let mut rng = rng.clone();
-
-            let mut other_nodes = Vec::with_capacity(nodes_name.len());
-            for (i, node_name) in nodes_name.iter().enumerate() {
-                if i != node_idx {
-                    other_nodes.push((node_name.as_ref().to_string(), 9000));
-                }
-            }
-
-            Box::pin(async move {
-                let time_provider = BrokenUnixTimeProvider::new(rng.clone());
-
-                let node = Node::<_, LT>::new(
-                    node_idx as u32,
-                    (IpAddr::from(Ipv4Addr::UNSPECIFIED), 9000),
-                    time_provider,
-                )
-                .await
-                .unwrap();
-
-                // start spaming
-                for i in 0..spam_msg_cnt {
-                    let msg = format!("hello from {node_idx}: {i}");
-
-                    let recipients_cnt = (rand::random::<usize>() % other_nodes.len()).max(1);
-
-                    tracing::info!(
-                        spam_msg_cnt = ?spam_msg_cnt,
-                        recipients_cnt = %recipients_cnt,
-                        "starting spaming"
-                    );
-
-                    for _ in 0..recipients_cnt {
-                        let recipient = other_nodes.choose(&mut rng).unwrap();
-
-                        node.send_message(&msg, recipient).await.unwrap();
-                    }
-                }
-
-                tracing::warn!("finished spaming. pending forever...");
-
-                node.pending_forever().await;
-
-                Ok(())
-            })
-        }
     }
 }
