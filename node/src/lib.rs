@@ -7,6 +7,7 @@ mod time;
 mod tests;
 
 use crate::error::NodeError;
+use crate::time::LamportClock;
 use network::types::*;
 use prost::Message;
 use proto::message::NodeMessage;
@@ -24,8 +25,7 @@ pub(crate) struct Node<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvid
     storage: Mutex<Vec<NodeMessage>>,
 
     // TODO: better
-    known_nodes: Mutex<Vec<SocketAddr>>,
-
+    // known_nodes: Mutex<Vec<SocketAddr>>,
     system_time_provider: ST,
     // TODO: use trait
     logical_time_provider: LT,
@@ -50,7 +50,7 @@ impl<
             id,
             socket,
             storage: Mutex::new(vec![]),
-            known_nodes: Mutex::new(vec![]),
+            // known_nodes: Mutex::new(vec![]),
             system_time_provider: time_provider,
             logical_time_provider,
         });
@@ -64,7 +64,7 @@ impl<
     }
 
     async fn listen_messages(self: Arc<Self>) {
-        tracing::info!("start listening messages");
+        tracing::info!("start listening messages (node {})", self.id);
         loop {
             match self.recv_message().await {
                 Ok(msg) => {
@@ -139,4 +139,32 @@ impl<
         let deserialized_msg = NodeMessage::decode(buf.as_slice())?;
         Ok(deserialized_msg)
     }
+}
+
+pub async fn dummy() {
+    use rand::SeedableRng;
+
+    let rng = rand::rngs::StdRng::seed_from_u64(42);
+    let time_provider = time::BrokenUnixTimeProvider::new(rng.clone());
+
+    let node = Node::<_, LamportClock>::new(
+        0,
+        (
+            std::net::IpAddr::from(std::net::Ipv4Addr::UNSPECIFIED),
+            9000,
+        ),
+        time_provider,
+    )
+    .await
+    .unwrap();
+
+    node.send_message(
+        "hello",
+        (
+            std::net::IpAddr::from(std::net::Ipv4Addr::UNSPECIFIED),
+            9000,
+        ),
+    )
+    .await
+    .unwrap();
 }

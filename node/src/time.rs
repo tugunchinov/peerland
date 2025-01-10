@@ -1,5 +1,6 @@
 use crate::sync::SpinLock;
 use rand::Rng;
+use std::ops::Deref;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
@@ -91,10 +92,10 @@ pub(crate) struct LamportClock {
     counter: AtomicU64,
 
     #[cfg(debug_assertions)]
-    lt_logs: SpinLock<Vec<LamportClockUnit>>,
+    previous_lt: SpinLock<LamportClockUnit>,
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+#[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub(crate) struct LamportClockUnit(pub(crate) (u64, u32));
 
 // TODO: check if it's correct
@@ -106,8 +107,8 @@ impl LogicalTimeProvider for LamportClock {
     }
 
     fn next_timestamp(&self) -> Self::Unit {
-        let maybe_log_lock = if cfg!(debug_assertions) {
-            Some(self.lt_logs.lock())
+        let maybe_previous_lt_lock = if cfg!(debug_assertions) {
+            Some(self.previous_lt.lock())
         } else {
             None
         };
@@ -116,20 +117,16 @@ impl LogicalTimeProvider for LamportClock {
         let unit = LamportClockUnit((lt, self.id));
 
         if cfg!(debug_assertions) {
-            let mut log_lock = maybe_log_lock.unwrap();
+            let mut last_lt = maybe_previous_lt_lock.unwrap();
 
-            if !log_lock.is_empty() {
-                let last = log_lock.last().unwrap();
+            assert!(
+                last_lt.deref() < &unit,
+                "logical time reverted: last: {:?}, current: {:?}",
+                *last_lt,
+                &unit,
+            );
 
-                assert!(
-                    last < &unit,
-                    "logical time reverted: last: {:?}, current: {:?}",
-                    last,
-                    &unit,
-                );
-            }
-
-            log_lock.push(unit);
+            *last_lt = unit;
         }
 
         unit
@@ -171,7 +168,7 @@ impl LamportClock {
             counter: AtomicU64::new(0),
 
             #[cfg(debug_assertions)]
-            lt_logs: SpinLock::new(Vec::with_capacity(1024)),
+            previous_lt: SpinLock::new(LamportClockUnit::default()),
         }
     }
 }
