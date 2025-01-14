@@ -1,15 +1,76 @@
-use crate::time::BrokenUnixTimeProvider;
+use crate::sync::SpinLock;
+use crate::time::{Millis, SystemTimeProvider};
 use crate::{time, Node};
 use network::turmoil;
 use rand::prelude::SliceRandom;
-use std::cell::RefCell;
+use rand::Rng;
 use std::future::Future;
-use std::mem::transmute;
 use std::net::{IpAddr, Ipv4Addr};
 use std::pin::Pin;
-use std::sync::mpsc::{Sender, TryRecvError};
-use std::time::Duration;
-use tokio::sync::SemaphorePermit;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::Sender;
+use std::time::SystemTime;
+
+pub(crate) struct BrokenUnixTimeProvider<R: Rng> {
+    start_time: SystemTime,
+    last_ts: AtomicU64,
+    rng: SpinLock<R>,
+}
+
+impl<R: Rng + Send + 'static> BrokenUnixTimeProvider<R> {
+    pub fn new(rng: R) -> Self {
+        let last_ts = AtomicU64::new(0);
+        let start_time = SystemTime::now();
+
+        let rng = SpinLock::new(rng);
+
+        Self {
+            start_time,
+            last_ts,
+            rng,
+        }
+    }
+}
+
+impl<R: Rng + Send + 'static> SystemTimeProvider for BrokenUnixTimeProvider<R> {
+    fn now_millis(&self) -> Millis {
+        let mut rng_guard = self.rng.lock();
+        let run_faster = rng_guard.gen_bool(0.5);
+        let run_slower = rng_guard.gen_bool(0.5);
+        drop(rng_guard);
+
+        let mut now = self.start_time.elapsed().unwrap().as_millis() as u64;
+
+        let mut last_ts = self.last_ts.load(Ordering::Relaxed);
+        loop {
+            if now < last_ts {
+                return (last_ts as u128).into();
+            }
+
+            if run_faster {
+                now += 100 + (rand::random::<u64>() % 1001); // add from 0.1 to 1 sec
+            } else if run_slower {
+                let diff = now - last_ts;
+                if diff > 0 {
+                    let mut rng_guard = self.rng.lock();
+                    now = last_ts + (rng_guard.gen::<u64>() % diff);
+                }
+            }
+
+            match self.last_ts.compare_exchange_weak(
+                last_ts,
+                now,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => last_ts = actual,
+            }
+        }
+
+        (now as u128).into()
+    }
+}
 
 #[test]
 fn lt_doesnt_go_backwards() {
@@ -54,9 +115,8 @@ fn lt_doesnt_go_backwards() {
         while nodes_finished < node_names.len() {
             matrix.run().unwrap();
 
-            match rx.try_recv() {
-                Ok(_) => nodes_finished += 1,
-                Err(_) => {}
+            if rx.try_recv().is_ok() {
+                nodes_finished += 1;
             }
         }
 

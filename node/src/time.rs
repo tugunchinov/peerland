@@ -1,8 +1,5 @@
 use crate::sync::SpinLock;
-use rand::Rng;
-use std::ops::Deref;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::SystemTime;
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Millis(pub u128);
@@ -17,73 +14,25 @@ pub trait SystemTimeProvider: Send + Sync + 'static {
     fn now_millis(&self) -> Millis;
 }
 
-// TODO: move to tests
-pub(crate) struct BrokenUnixTimeProvider<R: Rng> {
-    start_time: SystemTime,
-    last_ts: AtomicU64,
-    rng: SpinLock<R>,
-}
+pub struct UnixTimeProvider;
 
-impl<R: Rng + Send + 'static> BrokenUnixTimeProvider<R> {
-    pub fn new(rng: R) -> Self {
-        let last_ts = AtomicU64::new(0);
-        let start_time = SystemTime::now();
-
-        let rng = SpinLock::new(rng);
-
-        Self {
-            start_time,
-            last_ts,
-            rng,
-        }
-    }
-}
-
-impl<R: Rng + Send + 'static> SystemTimeProvider for BrokenUnixTimeProvider<R> {
+impl SystemTimeProvider for UnixTimeProvider {
     fn now_millis(&self) -> Millis {
-        let mut rng_guard = self.rng.lock();
-        let run_faster = rng_guard.gen_bool(0.5);
-        let run_slower = rng_guard.gen_bool(0.5);
-        drop(rng_guard);
-
-        let mut now = self.start_time.elapsed().unwrap().as_millis() as u64;
-
-        let mut last_ts = self.last_ts.load(Ordering::Relaxed);
-        loop {
-            if now < last_ts {
-                return (last_ts as u128).into();
-            }
-
-            if run_faster {
-                now += 100 + (rand::random::<u64>() % 1001); // add from 0.1 to 1 sec
-            } else if run_slower {
-                let diff = now - last_ts;
-                if diff > 0 {
-                    let mut rng_guard = self.rng.lock();
-                    now = last_ts + (rng_guard.gen::<u64>() % diff);
-                }
-            }
-
-            match self.last_ts.compare_exchange_weak(
-                last_ts,
-                now,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => break,
-                Err(actual) => last_ts = actual,
-            }
-        }
-
-        (now as u128).into()
+        std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            .into()
     }
 }
 
 pub trait LogicalTimeProvider: Send + Sync + 'static {
-    type Unit: Ord;
+    type Unit: Ord + Into<crate::proto::message::node_message::Lt>;
     fn new_with_id(id: u32) -> Self;
-    fn next_timestamp(&self) -> Self::Unit;
-    fn adjust_timestamp(&self, timestamp: Self::Unit);
+    fn tick(&self) -> Self::Unit;
+
+    // TODO: add Result
+    fn adjust_from_message(&self, message: &crate::proto::message::NodeMessage);
 }
 
 pub(crate) struct LamportClock {
@@ -92,11 +41,23 @@ pub(crate) struct LamportClock {
     counter: AtomicU64,
 
     #[cfg(debug_assertions)]
-    previous_lt: SpinLock<LamportClockUnit>,
+    previous_lt: SpinLock<Option<LamportClockUnit>>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub(crate) struct LamportClockUnit(pub(crate) (u64, u32));
+
+impl From<LamportClockUnit> for crate::proto::message::node_message::Lt {
+    fn from(value: LamportClockUnit) -> Self {
+        use crate::proto::logical_time::LamportClockUnit;
+        use crate::proto::message::node_message::Lt;
+
+        Lt::LamportClock(LamportClockUnit {
+            lt: value.0 .0,
+            proc_id: value.0 .1,
+        })
+    }
+}
 
 // TODO: check if it's correct
 impl LogicalTimeProvider for LamportClock {
@@ -106,7 +67,7 @@ impl LogicalTimeProvider for LamportClock {
         Self::new(id)
     }
 
-    fn next_timestamp(&self) -> Self::Unit {
+    fn tick(&self) -> Self::Unit {
         let maybe_previous_lt_lock = if cfg!(debug_assertions) {
             Some(self.previous_lt.lock())
         } else {
@@ -119,39 +80,46 @@ impl LogicalTimeProvider for LamportClock {
         if cfg!(debug_assertions) {
             let mut last_lt = maybe_previous_lt_lock.unwrap();
 
-            assert!(
-                last_lt.deref() < &unit,
-                "logical time reverted: last: {:?}, current: {:?}",
-                *last_lt,
-                &unit,
-            );
+            if !last_lt.is_none() {
+                assert!(
+                    last_lt.as_ref().unwrap() < &unit,
+                    "logical time reverted: last: {:?}, current: {:?}",
+                    *last_lt,
+                    &unit,
+                );
 
-            *last_lt = unit;
+                *last_lt = Some(unit);
+            }
         }
 
         unit
     }
 
-    fn adjust_timestamp(&self, ts: Self::Unit) {
-        let mut current = self.counter.load(Ordering::Acquire);
-        let ts_millis = ts.0 .0;
+    fn adjust_from_message(&self, msg: &crate::proto::message::NodeMessage) {
+        use crate::proto::logical_time::LamportClockUnit;
+        use crate::proto::message::node_message::Lt;
 
-        if ts_millis > current {
+        let mut current = self.counter.load(Ordering::Acquire);
+        let Some(Lt::LamportClock(LamportClockUnit { lt, .. })) = msg.lt else {
+            return;
+        };
+
+        if lt > current {
             loop {
                 match self.counter.compare_exchange_weak(
                     current,
-                    ts_millis,
+                    lt,
                     Ordering::Release,
                     Ordering::Acquire,
                 ) {
                     Ok(_) => {
-                        tracing::warn!("timestamp adjusted: {current} -> {ts_millis}");
+                        tracing::warn!("timestamp adjusted: {current} -> {lt}");
                         break;
                     }
                     Err(actual) => {
                         current = actual;
 
-                        if current >= ts_millis {
+                        if current >= lt {
                             break;
                         }
                     }
@@ -168,7 +136,7 @@ impl LamportClock {
             counter: AtomicU64::new(0),
 
             #[cfg(debug_assertions)]
-            previous_lt: SpinLock::new(LamportClockUnit::default()),
+            previous_lt: SpinLock::new(None),
         }
     }
 }

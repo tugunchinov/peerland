@@ -31,12 +31,7 @@ pub(crate) struct Node<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvid
     logical_time_provider: LT,
 }
 
-// TODO: move to separate mod for different logical clocks && make it private
-impl<
-        ST: time::SystemTimeProvider,
-        LT: time::LogicalTimeProvider<Unit = time::LamportClockUnit>,
-    > Node<ST, LT>
-{
+impl<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider> Node<ST, LT> {
     pub async fn new(
         id: u32,
         addr: impl ToSocketAddrs,
@@ -68,24 +63,13 @@ impl<
         loop {
             match self.recv_message().await {
                 Ok(msg) => {
-                    let now: prost_types::Timestamp = self.system_time_provider.now_millis().into();
-                    tracing::info!(
-                        now = ?now,
-                        msg_ts = ?msg.ts,
-                        msg_lt = ?msg.lt,
-                        "received message"
-                    );
-
-                    if let Some(proto::message::node_message::Lt::LamportClock(msg_lt)) = msg.lt {
-                        self.logical_time_provider.adjust_timestamp(msg_lt.into());
-                    } else {
-                        tracing::warn!(msg_lt = ?msg.lt, "unknown logical time format");
-                    }
+                    self.logical_time_provider.adjust_from_message(&msg);
+                    self.logical_time_provider.tick();
                     self.storage.lock().await.push(msg);
                 }
                 Err(e) => {
                     tracing::error!(error = ?e, "failed receiving message");
-                    // tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
                 }
             }
         }
@@ -99,21 +83,7 @@ impl<
         // TODO: from config
         const TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(10);
 
-        let ts = self.system_time_provider.now_millis().into();
-        tracing::info!(timestamp = ?ts, "sending message");
-
-        let msg = NodeMessage {
-            id: Some(proto::message::Uuid {
-                value: uuid::Uuid::new_v4().into(),
-            }),
-            kind: proto::message::node_message::MessageKind::Ordinary as i32,
-            ts: Some(ts),
-            lt: Some(proto::message::node_message::Lt::LamportClock(
-                self.logical_time_provider.next_timestamp().into(),
-            )),
-            data: msg.as_ref().to_vec(),
-        };
-        let serialized_msg = msg.encode_to_vec();
+        let serialized_msg = self.create_serialized_node_message(msg);
 
         let mut stream = tokio::time::timeout(TIMEOUT, TcpStream::connect(to)).await??;
         tokio::time::timeout(
@@ -126,6 +96,7 @@ impl<
     }
 
     async fn recv_message(&self) -> Result<NodeMessage, NodeError> {
+        // TODO: smarter bound
         const MAX_MSG_SIZE_BYTES: usize = 8 * 1024;
         let mut buf = Vec::with_capacity(MAX_MSG_SIZE_BYTES);
         let (mut stream, _addr) = self.socket.accept().await?;
@@ -139,13 +110,26 @@ impl<
         let deserialized_msg = NodeMessage::decode(buf.as_slice())?;
         Ok(deserialized_msg)
     }
+
+    fn create_serialized_node_message<B: AsRef<[u8]>>(&self, data: B) -> Vec<u8> {
+        let ts = self.system_time_provider.now_millis().into();
+
+        let msg = NodeMessage {
+            id: Some(proto::message::Uuid {
+                value: uuid::Uuid::new_v4().into(),
+            }),
+            kind: proto::message::node_message::MessageKind::Ordinary as i32,
+            ts: Some(ts),
+            lt: Some(self.logical_time_provider.tick().into()),
+            data: data.as_ref().to_vec(),
+        };
+        msg.encode_to_vec()
+    }
 }
 
+// TODO: remove (used to fool cargo clippy)
 pub async fn dummy() {
-    use rand::SeedableRng;
-
-    let rng = rand::rngs::StdRng::seed_from_u64(42);
-    let time_provider = time::BrokenUnixTimeProvider::new(rng.clone());
+    let time_provider = time::UnixTimeProvider;
 
     let node = Node::<_, LamportClock>::new(
         0,
