@@ -1,3 +1,4 @@
+mod broadcast;
 mod error;
 mod proto;
 mod sync;
@@ -8,14 +9,21 @@ mod tests;
 
 use crate::error::NodeError;
 use crate::time::LamportClock;
+use network::discovery::{Discovery, StaticDiscovery};
 use network::types::*;
 use prost::Message;
 use proto::message::NodeMessage;
+use rand::Rng;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 
-pub(crate) struct Node<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider> {
+pub(crate) struct Node<
+    ST: time::SystemTimeProvider,
+    LT: time::LogicalTimeProvider,
+    D: Discovery,
+    R: Rng,
+> {
     id: u32,
 
     // TODO: use custom protocol over UDP?
@@ -26,16 +34,27 @@ pub(crate) struct Node<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvid
 
     // TODO: better
     // known_nodes: Mutex<Vec<SocketAddr>>,
+    discovery: D,
+
     system_time_provider: ST,
-    // TODO: use trait
     logical_time_provider: LT,
+
+    entropy: R,
 }
 
-impl<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider> Node<ST, LT> {
+impl<
+        ST: time::SystemTimeProvider,
+        LT: time::LogicalTimeProvider,
+        D: Discovery,
+        R: Rng + Send + Sync + 'static,
+    > Node<ST, LT, D, R>
+{
     pub async fn new(
         id: u32,
         addr: impl ToSocketAddrs,
         time_provider: ST,
+        discovery: D,
+        entropy: R,
     ) -> Result<Arc<Self>, NodeError> {
         let socket = TcpListener::bind(addr).await?;
 
@@ -46,8 +65,10 @@ impl<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider> Node<ST, LT> {
             socket,
             storage: Mutex::new(vec![]),
             // known_nodes: Mutex::new(vec![]),
+            discovery,
             system_time_provider: time_provider,
             logical_time_provider,
+            entropy,
         });
 
         {
@@ -75,24 +96,23 @@ impl<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider> Node<ST, LT> {
         }
     }
 
+    async fn send_message_int(&self, msg: &[u8], to: impl ToSocketAddrs) -> Result<(), NodeError> {
+        // TODO: from config
+        const TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(10);
+
+        let mut stream = tokio::time::timeout(TIMEOUT, TcpStream::connect(to)).await??;
+        tokio::time::timeout(tokio::time::Duration::from_secs(10), stream.write_all(msg)).await??;
+
+        Ok(())
+    }
+
     pub(crate) async fn send_message<B: AsRef<[u8]>>(
         &self,
         msg: B,
         to: impl ToSocketAddrs,
     ) -> Result<(), NodeError> {
-        // TODO: from config
-        const TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(10);
-
         let serialized_msg = self.create_serialized_node_message(msg);
-
-        let mut stream = tokio::time::timeout(TIMEOUT, TcpStream::connect(to)).await??;
-        tokio::time::timeout(
-            tokio::time::Duration::from_secs(10),
-            stream.write_all(&serialized_msg),
-        )
-        .await??;
-
-        Ok(())
+        self.send_message_int(&serialized_msg, to).await
     }
 
     async fn recv_message(&self) -> Result<NodeMessage, NodeError> {
@@ -112,17 +132,22 @@ impl<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider> Node<ST, LT> {
     }
 
     fn create_serialized_node_message<B: AsRef<[u8]>>(&self, data: B) -> Vec<u8> {
+        use proto::*;
+
         let ts = self.system_time_provider.now_millis().into();
 
         let msg = NodeMessage {
-            id: Some(proto::message::Uuid {
+            id: Some(message::Uuid {
                 value: uuid::Uuid::new_v4().into(),
             }),
-            kind: proto::message::node_message::MessageKind::Ordinary as i32,
+            message_kind: Some(message::MessageKind::Broadcast(broadcast::Broadcast {
+                broadcast_type: broadcast::BroadcastType::Gossip as i32,
+            })),
             ts: Some(ts),
             lt: Some(self.logical_time_provider.tick().into()),
-            data: data.as_ref().to_vec(),
+            payload: data.as_ref().to_vec(),
         };
+
         msg.encode_to_vec()
     }
 }
@@ -131,13 +156,18 @@ impl<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider> Node<ST, LT> {
 pub async fn dummy() {
     let time_provider = time::UnixTimeProvider;
 
-    let node = Node::<_, LamportClock>::new(
+    let discovery = StaticDiscovery::new([("127.0.0.1", 8080)]);
+    let entropy = rand::rngs::OsRng;
+
+    let node = Node::<_, LamportClock, _, _>::new(
         0,
         (
             std::net::IpAddr::from(std::net::Ipv4Addr::UNSPECIFIED),
             9000,
         ),
         time_provider,
+        discovery,
+        entropy,
     )
     .await
     .unwrap();

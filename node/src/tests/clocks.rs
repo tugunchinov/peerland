@@ -1,6 +1,7 @@
 use crate::sync::SpinLock;
 use crate::time::{Millis, SystemTimeProvider};
 use crate::{time, Node};
+use network::discovery::StaticDiscovery;
 use network::turmoil;
 use rand::prelude::SliceRandom;
 use rand::Rng;
@@ -126,7 +127,7 @@ fn lt_doesnt_go_backwards() {
 
 fn configure_node<
     S: AsRef<str>,
-    T: rand::Rng + Clone + Send + 'static,
+    T: Rng + Clone + Send + Sync + 'static,
     LT: time::LogicalTimeProvider<Unit = time::LamportClockUnit>,
 >(
     nodes_name: Vec<S>,
@@ -149,11 +150,15 @@ fn configure_node<
 
         Box::pin(async move {
             let time_provider = BrokenUnixTimeProvider::new(rng.clone());
+            let discovery = StaticDiscovery::new(other_nodes.clone());
+            let entropy = rng.clone();
 
-            let node = Node::<_, LT>::new(
+            let node = Node::<_, LT, _, _>::new(
                 node_idx as u32,
                 (IpAddr::from(Ipv4Addr::UNSPECIFIED), 9000),
                 time_provider,
+                discovery,
+                entropy,
             )
             .await
             .unwrap();

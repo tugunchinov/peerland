@@ -27,7 +27,7 @@ impl SystemTimeProvider for UnixTimeProvider {
 }
 
 pub trait LogicalTimeProvider: Send + Sync + 'static {
-    type Unit: Ord + Into<crate::proto::message::node_message::Lt>;
+    type Unit: Ord + Into<crate::proto::message::Lt>;
     fn new_with_id(id: u32) -> Self;
     fn tick(&self) -> Self::Unit;
 
@@ -47,10 +47,10 @@ pub(crate) struct LamportClock {
 #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub(crate) struct LamportClockUnit(pub(crate) (u64, u32));
 
-impl From<LamportClockUnit> for crate::proto::message::node_message::Lt {
+impl From<LamportClockUnit> for crate::proto::message::Lt {
     fn from(value: LamportClockUnit) -> Self {
-        use crate::proto::logical_time::LamportClockUnit;
-        use crate::proto::message::node_message::Lt;
+        use crate::proto::lt::LamportClockUnit;
+        use crate::proto::message::Lt;
 
         Lt::LamportClock(LamportClockUnit {
             lt: value.0 .0,
@@ -96,8 +96,8 @@ impl LogicalTimeProvider for LamportClock {
     }
 
     fn adjust_from_message(&self, msg: &crate::proto::message::NodeMessage) {
-        use crate::proto::logical_time::LamportClockUnit;
-        use crate::proto::message::node_message::Lt;
+        use crate::proto::lt::LamportClockUnit;
+        use crate::proto::message::Lt;
 
         let mut current = self.counter.load(Ordering::Acquire);
         let Some(Lt::LamportClock(LamportClockUnit { lt, .. })) = msg.lt else {

@@ -1,25 +1,26 @@
 syntax = "proto3";
 
-package message;
+package peerland.message;
 
+import "broadcast.proto";
 import "google/protobuf/timestamp.proto";
 import "logical_time.proto";
 
-message Uuid {
-    bytes value = 1;
-}
-
 message NodeMessage {
-    enum MessageKind {
-        ORDINARY = 0;
-        NOTIFY = 1;
+    message Uuid {
+        bytes value = 1;
     }
 
     Uuid id = 1;
-    MessageKind kind = 2;
+
+    oneof message_kind {
+        peerland.broadcast.Broadcast broadcast = 2;
+    }
+
     google.protobuf.Timestamp ts = 3;
     oneof lt {
-        logical_time.LamportClockUnit lamport_clock = 4;
+        peerland.lt.LamportClockUnit lamport_clock = 4;
     }
-    bytes data = 5;
+
+    bytes payload = 5;
 }

@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package peerland.broadcast;
+
+message Broadcast {
+    enum BroadcastType {
+        GOSSIP = 0;
+    }
+
+    BroadcastType broadcast_type = 1;
+}
