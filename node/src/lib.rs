@@ -46,7 +46,7 @@ impl<
         ST: time::SystemTimeProvider,
         LT: time::LogicalTimeProvider,
         D: Discovery,
-        R: Rng + Send + Sync + 'static,
+        R: Rng + Send + Sync + 'static + Clone,
     > Node<ST, LT, D, R>
 {
     pub async fn new(
@@ -80,13 +80,36 @@ impl<
     }
 
     async fn listen_messages(self: Arc<Self>) {
+        use crate::proto::{broadcast, message};
+
         tracing::info!("start listening messages (node {})", self.id);
         loop {
             match self.recv_message().await {
                 Ok(msg) => {
+                    // TODO: extract function
+
                     self.logical_time_provider.adjust_from_message(&msg);
                     self.logical_time_provider.tick();
-                    self.storage.lock().await.push(msg);
+
+                    self.storage.lock().await.push(msg.clone());
+
+                    if let Some(msg_kind) = msg.message_kind {
+                        match msg_kind {
+                            message::MessageKind::Broadcast(b) => {
+                                if let Ok(broadcast_type) = b.broadcast_type.try_into() {
+                                    match broadcast_type {
+                                        broadcast::BroadcastType::Gossip => {
+                                            self.gossip(msg, 3).await;
+                                        }
+                                    }
+                                } else {
+                                    tracing::warn!(broadcast = ?b, "unknown broadcast type");
+                                }
+                            }
+                        }
+                    } else {
+                        tracing::warn!(msg_id = ?msg.id, "unknown message kind");
+                    }
                 }
                 Err(e) => {
                     tracing::error!(error = ?e, "failed receiving message");
@@ -96,12 +119,20 @@ impl<
         }
     }
 
-    async fn send_message_int(&self, msg: &[u8], to: impl ToSocketAddrs) -> Result<(), NodeError> {
+    async fn send_message_int(
+        &self,
+        serialized_msg: &[u8],
+        to: impl ToSocketAddrs,
+    ) -> Result<(), NodeError> {
         // TODO: from config
         const TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(10);
 
         let mut stream = tokio::time::timeout(TIMEOUT, TcpStream::connect(to)).await??;
-        tokio::time::timeout(tokio::time::Duration::from_secs(10), stream.write_all(msg)).await??;
+        tokio::time::timeout(
+            tokio::time::Duration::from_secs(10),
+            stream.write_all(serialized_msg),
+        )
+        .await??;
 
         Ok(())
     }
@@ -111,7 +142,13 @@ impl<
         msg: B,
         to: impl ToSocketAddrs,
     ) -> Result<(), NodeError> {
-        let serialized_msg = self.create_serialized_node_message(msg);
+        use crate::proto::*;
+
+        let msg_kind = message::MessageKind::Broadcast(broadcast::Broadcast {
+            broadcast_type: broadcast::BroadcastType::Gossip as i32,
+        });
+
+        let serialized_msg = self.create_serialized_node_message(msg, msg_kind);
         self.send_message_int(&serialized_msg, to).await
     }
 
@@ -131,18 +168,19 @@ impl<
         Ok(deserialized_msg)
     }
 
-    fn create_serialized_node_message<B: AsRef<[u8]>>(&self, data: B) -> Vec<u8> {
-        use proto::*;
-
+    fn create_serialized_node_message<B: AsRef<[u8]>>(
+        &self,
+        data: B,
+        msg_kind: proto::message::MessageKind,
+    ) -> Vec<u8> {
+        use proto::message;
         let ts = self.system_time_provider.now_millis().into();
 
         let msg = NodeMessage {
             id: Some(message::Uuid {
                 value: uuid::Uuid::new_v4().into(),
             }),
-            message_kind: Some(message::MessageKind::Broadcast(broadcast::Broadcast {
-                broadcast_type: broadcast::BroadcastType::Gossip as i32,
-            })),
+            message_kind: Some(msg_kind),
             ts: Some(ts),
             lt: Some(self.logical_time_provider.tick().into()),
             payload: data.as_ref().to_vec(),

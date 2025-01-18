@@ -30,7 +30,7 @@ impl<T: ToSocketAddrs + Clone + Eq + Hash + Send + Sync + 'static> StaticDiscove
 impl<T: ToSocketAddrs + Clone + Eq + Hash + Send + Sync + 'static> Discovery
     for StaticDiscovery<T>
 {
-    fn list_known_nodes(&self) -> impl IntoIterator<Item = impl ToSocketAddrs> {
+    fn list_known_nodes(&self) -> impl IntoIterator<Item = impl ToSocketAddrs + Send> {
         let guard = self.known_nodes.read().expect("lock poisoned");
         guard.iter().map(|v| v.clone()).collect::<Vec<T>>()
     }
@@ -39,7 +39,7 @@ impl<T: ToSocketAddrs + Clone + Eq + Hash + Send + Sync + 'static> Discovery
         &self,
         cnt: usize,
         mut entropy: impl Rng,
-    ) -> impl IntoIterator<Item = impl ToSocketAddrs> {
+    ) -> impl IntoIterator<Item = impl ToSocketAddrs + Send> {
         let guard = self.known_nodes.read().expect("lock poisoned");
         let mut list = guard.iter().map(|v| v.clone()).collect::<Vec<T>>();
         list.shuffle(&mut entropy);

@@ -11,10 +11,15 @@ impl<
         R: Rng + Send + Sync + 'static + Clone,
     > Node<ST, LT, D, R>
 {
-    async fn gossip(&self, msg: NodeMessage, level: usize) {
+    pub(crate) async fn gossip(&self, msg: NodeMessage, level: usize) {
         let serialized_msg = msg.encode_to_vec();
         let mut entropy = self.entropy.clone();
-        for node in self.discovery.get_random_nodes(level, &mut entropy) {
+        let nodes = self
+            .discovery
+            .get_random_nodes(level, &mut entropy)
+            .into_iter()
+            .collect::<Vec<_>>();
+        for node in nodes {
             if let Err(e) = self.send_message_int(&serialized_msg, node).await {
                 tracing::error!(error = %e, "failed sending message");
             }
