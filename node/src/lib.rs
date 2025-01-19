@@ -1,14 +1,13 @@
 mod broadcast;
 mod error;
 mod proto;
-mod sync;
 mod time;
+mod utils;
 
 #[cfg(test)]
 mod tests;
 
 use crate::error::NodeError;
-use crate::time::LamportClock;
 use network::discovery::{Discovery, StaticDiscovery};
 use network::types::*;
 use prost::Message;
@@ -197,7 +196,7 @@ pub async fn dummy() {
     let discovery = StaticDiscovery::new([("127.0.0.1", 8080)]);
     let entropy = rand::rngs::OsRng;
 
-    let node = Node::<_, LamportClock, _, _>::new(
+    let node = Node::<_, time::LamportClock, _, _>::new(
         0,
         (
             std::net::IpAddr::from(std::net::Ipv4Addr::UNSPECIFIED),

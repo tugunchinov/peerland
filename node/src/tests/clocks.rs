@@ -1,5 +1,5 @@
-use crate::sync::SpinLock;
 use crate::time::{Millis, SystemTimeProvider};
+use crate::utils::sync::SpinLock;
 use crate::{time, Node};
 use network::discovery::StaticDiscovery;
 use network::turmoil;

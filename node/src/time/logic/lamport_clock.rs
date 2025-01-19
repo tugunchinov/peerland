@@ -1,39 +1,6 @@
-use crate::sync::SpinLock;
+use crate::time::LogicalTimeProvider;
+use crate::utils::sync::SpinLock;
 use std::sync::atomic::{AtomicU64, Ordering};
-
-#[derive(Clone, Debug, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Millis(pub u128);
-
-impl From<u128> for Millis {
-    fn from(val: u128) -> Self {
-        Self(val)
-    }
-}
-
-pub trait SystemTimeProvider: Send + Sync + 'static {
-    fn now_millis(&self) -> Millis;
-}
-
-pub struct UnixTimeProvider;
-
-impl SystemTimeProvider for UnixTimeProvider {
-    fn now_millis(&self) -> Millis {
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-            .into()
-    }
-}
-
-pub trait LogicalTimeProvider: Send + Sync + 'static {
-    type Unit: Ord + Into<crate::proto::message::Lt>;
-    fn new_with_id(id: u32) -> Self;
-    fn tick(&self) -> Self::Unit;
-
-    // TODO: add Result
-    fn adjust_from_message(&self, message: &crate::proto::message::NodeMessage);
-}
 
 pub(crate) struct LamportClock {
     /// Must be unique. Otherwise, there isn't the guarantee about strong monotonicity.
