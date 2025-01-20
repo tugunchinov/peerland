@@ -8,11 +8,12 @@ mod utils;
 mod tests;
 
 use crate::error::NodeError;
-use network::discovery::{Discovery, StaticDiscovery};
+use network::discovery::Discovery;
 use network::types::*;
 use prost::Message;
 use proto::message::NodeMessage;
 use rand::Rng;
+use std::fmt::Debug;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
@@ -29,7 +30,7 @@ pub(crate) struct Node<
     socket: TcpListener,
 
     // TODO: make service
-    storage: Mutex<Vec<NodeMessage>>,
+    storage: Mutex<Vec<Vec<u8>>>,
 
     // TODO: better
     // known_nodes: Mutex<Vec<SocketAddr>>,
@@ -90,7 +91,9 @@ impl<
                     self.logical_time_provider.adjust_from_message(&msg);
                     self.logical_time_provider.tick();
 
-                    self.storage.lock().await.push(msg.clone());
+                    let payload = msg.payload;
+
+                    self.storage.lock().await.push(payload.clone());
 
                     if let Some(msg_kind) = msg.message_kind {
                         match msg_kind {
@@ -98,7 +101,7 @@ impl<
                                 if let Ok(broadcast_type) = b.broadcast_type.try_into() {
                                     match broadcast_type {
                                         broadcast::BroadcastType::Gossip => {
-                                            self.gossip(msg, 3).await;
+                                            self.gossip(payload, 3).await;
                                         }
                                     }
                                 } else {
@@ -118,7 +121,7 @@ impl<
         }
     }
 
-    async fn send_message_int(
+    async fn send_serialized_message(
         &self,
         serialized_msg: &[u8],
         to: impl ToSocketAddrs,
@@ -127,6 +130,9 @@ impl<
         const TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(10);
 
         let mut stream = tokio::time::timeout(TIMEOUT, TcpStream::connect(to)).await??;
+
+        tracing::info!(recipient = ?stream.peer_addr(), "sending message");
+
         tokio::time::timeout(
             tokio::time::Duration::from_secs(10),
             stream.write_all(serialized_msg),
@@ -134,21 +140,6 @@ impl<
         .await??;
 
         Ok(())
-    }
-
-    pub(crate) async fn send_message<B: AsRef<[u8]>>(
-        &self,
-        msg: B,
-        to: impl ToSocketAddrs,
-    ) -> Result<(), NodeError> {
-        use crate::proto::*;
-
-        let msg_kind = message::MessageKind::Broadcast(broadcast::Broadcast {
-            broadcast_type: broadcast::BroadcastType::Gossip as i32,
-        });
-
-        let serialized_msg = self.create_serialized_node_message(msg, msg_kind);
-        self.send_message_int(&serialized_msg, to).await
     }
 
     async fn recv_message(&self) -> Result<NodeMessage, NodeError> {
@@ -187,35 +178,9 @@ impl<
 
         msg.encode_to_vec()
     }
-}
 
-// TODO: remove (used to fool cargo clippy)
-pub async fn dummy() {
-    let time_provider = time::UnixTimeProvider;
-
-    let discovery = StaticDiscovery::new([("127.0.0.1", 8080)]);
-    let entropy = rand::rngs::OsRng;
-
-    let node = Node::<_, time::LamportClock, _, _>::new(
-        0,
-        (
-            std::net::IpAddr::from(std::net::Ipv4Addr::UNSPECIFIED),
-            9000,
-        ),
-        time_provider,
-        discovery,
-        entropy,
-    )
-    .await
-    .unwrap();
-
-    node.send_message(
-        "hello",
-        (
-            std::net::IpAddr::from(std::net::Ipv4Addr::UNSPECIFIED),
-            9000,
-        ),
-    )
-    .await
-    .unwrap();
+    #[cfg(debug_assertions)]
+    async fn get_messages_storage(&self) -> Vec<Vec<u8>> {
+        self.storage.lock().await.clone()
+    }
 }

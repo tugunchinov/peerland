@@ -2,7 +2,6 @@ mod logic;
 mod system;
 
 pub(crate) use logic::lamport_clock::{LamportClock, LamportClockUnit};
-pub(crate) use system::unix::UnixTimeProvider;
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Millis(pub u128);

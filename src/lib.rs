@@ -1,3 +1,1 @@
-pub async fn start() {
-    node::dummy().await;
-}
+pub async fn start() {}

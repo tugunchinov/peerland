@@ -1,7 +1,5 @@
-use crate::proto::message::NodeMessage;
 use crate::{time, Node};
 use network::discovery::Discovery;
-use prost::Message;
 use rand::Rng;
 
 impl<
@@ -11,8 +9,14 @@ impl<
         R: Rng + Send + Sync + 'static + Clone,
     > Node<ST, LT, D, R>
 {
-    pub(crate) async fn gossip(&self, msg: NodeMessage, level: usize) {
-        let serialized_msg = msg.encode_to_vec();
+    pub(crate) async fn gossip<B: AsRef<[u8]>>(&self, msg: B, level: usize) {
+        use crate::proto::*;
+
+        let msg_kind = message::MessageKind::Broadcast(broadcast::Broadcast {
+            broadcast_type: broadcast::BroadcastType::Gossip as i32,
+        });
+        let serialized_msg = self.create_serialized_node_message(msg, msg_kind);
+
         let mut entropy = self.entropy.clone();
         let nodes = self
             .discovery
@@ -20,7 +24,7 @@ impl<
             .into_iter()
             .collect::<Vec<_>>();
         for node in nodes {
-            if let Err(e) = self.send_message_int(&serialized_msg, node).await {
+            if let Err(e) = self.send_serialized_message(&serialized_msg, node).await {
                 tracing::error!(error = %e, "failed sending message");
             }
         }
