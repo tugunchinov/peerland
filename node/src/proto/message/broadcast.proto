@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package peerland.broadcast;
+package peerland.message.broadcast;
 
-message Broadcast {
+message MessageBroadcast {
     enum BroadcastType {
         GOSSIP = 0;
     }

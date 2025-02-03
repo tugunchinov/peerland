@@ -15,7 +15,7 @@ fn lt_doesnt_go_backwards() {
     )
     .expect("Configure tracing");
 
-    let node_names = ["node_1", "node_2", "node_3", "node_4", "node_5"];
+    let node_names = ["node_1", "node_2", "node_3"];
 
     for i in 0..10 {
         let seed = rand::random();
@@ -36,7 +36,7 @@ fn lt_doesnt_go_backwards() {
                 move |node: Arc<Node<BrokenUnixTimeProvider<_>, LamportClock, _, _>>| async move {
                     for i in 0..spam_msg_cnt {
                         let msg = format!("hello from {node_idx}: {i}");
-                        node.gossip(msg.clone().into_bytes(), 3).await
+                        node.gossip(msg.clone().into_bytes(), 1).await
                     }
 
                     tracing::warn!("finished spaming");

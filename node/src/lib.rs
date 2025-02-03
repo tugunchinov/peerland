@@ -80,7 +80,7 @@ impl<
     }
 
     async fn listen_messages(self: Arc<Self>) {
-        use crate::proto::{broadcast, message};
+        use crate::proto::message::*;
 
         tracing::info!("start listening messages (node {})", self.id);
         loop {
@@ -88,16 +88,13 @@ impl<
                 Ok(msg) => {
                     // TODO: extract function
 
-                    self.logical_time_provider.adjust_from_message(&msg);
-                    self.logical_time_provider.tick();
-
                     let payload = msg.payload;
 
                     self.storage.lock().await.push(payload.clone());
 
                     if let Some(msg_kind) = msg.message_kind {
                         match msg_kind {
-                            message::MessageKind::Broadcast(b) => {
+                            MessageKind::Broadcast(b) => {
                                 if let Ok(broadcast_type) = b.broadcast_type.try_into() {
                                     match broadcast_type {
                                         broadcast::BroadcastType::Gossip => {
@@ -107,6 +104,9 @@ impl<
                                 } else {
                                     tracing::warn!(broadcast = ?b, "unknown broadcast type");
                                 }
+                            }
+                            MessageKind::Addressed(a) => {
+                                todo!()
                             }
                         }
                     } else {
@@ -119,6 +119,15 @@ impl<
                 }
             }
         }
+    }
+
+    pub async fn send_message<B: AsRef<[u8]>>(
+        &self,
+        msg: B,
+        to: impl ToSocketAddrs,
+    ) -> Result<(), NodeError> {
+        // let serialized = self.create_serialized_node_message(msg, proto::message::MessageKind::)
+        todo!()
     }
 
     async fn send_serialized_message(
@@ -155,6 +164,11 @@ impl<
         }
 
         let deserialized_msg = NodeMessage::decode(buf.as_slice())?;
+
+        self.logical_time_provider
+            .adjust_from_message(&deserialized_msg);
+        self.logical_time_provider.tick();
+
         Ok(deserialized_msg)
     }
 

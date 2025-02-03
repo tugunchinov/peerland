@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package peerland;
+
+import "google/protobuf/timestamp.proto";
+import "message/addressed.proto";
+import "message/broadcast.proto";
+import "time/logical.proto";
+
+message NodeMessage {
+    message Uuid {
+        bytes value = 1;
+    }
+
+    Uuid id = 1;
+
+    oneof message_kind {
+        peerland.message.addressed.MessageAddressed addressed = 2;
+        peerland.message.broadcast.MessageBroadcast broadcast = 3;
+    }
+
+    google.protobuf.Timestamp ts = 4;
+    oneof lt {
+        peerland.time.logical.LamportClockUnit lamport_clock = 5;
+    }
+
+    bytes payload = 6;
+}

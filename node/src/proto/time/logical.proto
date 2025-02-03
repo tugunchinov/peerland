@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package peerland.lt;
+package peerland.time.logical;
 
 message LamportClockUnit {
     uint64 lt = 1;

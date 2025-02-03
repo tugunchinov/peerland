@@ -1,10 +1,10 @@
-impl From<crate::proto::lt::LamportClockUnit> for crate::time::LamportClockUnit {
-    fn from(value: crate::proto::lt::LamportClockUnit) -> Self {
+impl From<crate::proto::time::logical::LamportClockUnit> for crate::time::LamportClockUnit {
+    fn from(value: crate::proto::time::logical::LamportClockUnit) -> Self {
         Self((value.lt, value.proc_id))
     }
 }
 
-impl From<crate::time::LamportClockUnit> for crate::proto::lt::LamportClockUnit {
+impl From<crate::time::LamportClockUnit> for crate::proto::time::logical::LamportClockUnit {
     fn from(value: crate::time::LamportClockUnit) -> Self {
         Self {
             lt: value.0 .0,
