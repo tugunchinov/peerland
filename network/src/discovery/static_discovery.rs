@@ -3,6 +3,7 @@ use crate::types::ToSocketAddrs;
 use rand::seq::SliceRandom;
 use rand::Rng;
 use std::collections::HashSet;
+use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::RwLock;
 // TODO: make it less restrictive?
@@ -27,10 +28,10 @@ impl<T: ToSocketAddrs + Clone + Eq + Hash + Send + Sync + 'static> StaticDiscove
 }
 
 // TODO: optimize
-impl<T: ToSocketAddrs + Clone + Eq + Hash + Send + Sync + 'static> Discovery
+impl<T: ToSocketAddrs + Debug + Clone + Eq + Hash + Send + Sync + 'static> Discovery
     for StaticDiscovery<T>
 {
-    fn list_known_nodes(&self) -> impl IntoIterator<Item = impl ToSocketAddrs + Send> {
+    fn list_known_nodes(&self) -> impl IntoIterator<Item = impl ToSocketAddrs + Send + Debug> {
         let guard = self.known_nodes.read().expect("lock poisoned");
         guard.iter().map(|v| v.clone()).collect::<Vec<T>>()
     }
@@ -39,7 +40,7 @@ impl<T: ToSocketAddrs + Clone + Eq + Hash + Send + Sync + 'static> Discovery
         &self,
         cnt: usize,
         mut entropy: impl Rng,
-    ) -> impl IntoIterator<Item = impl ToSocketAddrs + Send> {
+    ) -> impl IntoIterator<Item = impl ToSocketAddrs + Send + Debug> {
         let guard = self.known_nodes.read().expect("lock poisoned");
         let mut list = guard.iter().map(|v| v.clone()).collect::<Vec<T>>();
         list.shuffle(&mut entropy);
