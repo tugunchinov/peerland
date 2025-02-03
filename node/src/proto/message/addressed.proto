@@ -2,11 +2,7 @@ syntax = "proto3";
 
 package peerland.message.addressed;
 
-message MessageAddressed {
-    enum MessageType {
-        ORDINARY = 0;
-        KEEP_ALIVE = 1;
-    }
-
-    MessageType message_type = 1;
+enum MessageType {
+    MESSAGE_TYPE_ORDINARY = 0;
+    MESSAGE_TYPE_KEEP_ALIVE = 1;
 }

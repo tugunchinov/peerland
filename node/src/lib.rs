@@ -1,4 +1,4 @@
-mod broadcast;
+mod communication;
 mod error;
 mod proto;
 mod time;
@@ -95,14 +95,14 @@ impl<
                     if let Some(msg_kind) = msg.message_kind {
                         match msg_kind {
                             MessageKind::Broadcast(b) => {
-                                if let Ok(broadcast_type) = b.broadcast_type.try_into() {
+                                if let Ok(broadcast_type) = b.try_into() {
                                     match broadcast_type {
                                         broadcast::BroadcastType::Gossip => {
                                             self.gossip(payload, 3).await;
                                         }
                                     }
                                 } else {
-                                    tracing::warn!(broadcast = ?b, "unknown broadcast type");
+                                    unreachable!()
                                 }
                             }
                             MessageKind::Addressed(a) => {
@@ -119,15 +119,6 @@ impl<
                 }
             }
         }
-    }
-
-    pub async fn send_message<B: AsRef<[u8]>>(
-        &self,
-        msg: B,
-        to: impl ToSocketAddrs,
-    ) -> Result<(), NodeError> {
-        // let serialized = self.create_serialized_node_message(msg, proto::message::MessageKind::)
-        todo!()
     }
 
     async fn send_serialized_message(

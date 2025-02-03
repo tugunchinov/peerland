@@ -24,19 +24,10 @@ pub mod message {
     pub use super::peerland::node_message::*;
     pub use super::peerland::NodeMessage;
 
-    pub mod addressed {
-        pub use super::super::peerland::message::addressed::message_addressed::*;
-        pub use super::super::peerland::message::addressed::MessageAddressed;
-    }
-
-    pub mod broadcast {
-        pub use super::super::peerland::message::broadcast::message_broadcast::*;
-        pub use super::super::peerland::message::broadcast::MessageBroadcast;
-    }
+    pub use super::peerland::message::addressed;
+    pub use super::peerland::message::broadcast;
 }
 
 pub mod time {
-    pub mod logical {
-        pub use super::super::peerland::time::logical::*;
-    }
+    pub use super::peerland::time::logical;
 }

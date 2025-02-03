@@ -12,9 +12,7 @@ impl<
     pub(crate) async fn gossip<B: AsRef<[u8]>>(&self, msg: B, level: usize) {
         use crate::proto::message::*;
 
-        let msg_kind = MessageKind::Broadcast(broadcast::MessageBroadcast {
-            broadcast_type: broadcast::BroadcastType::Gossip as i32,
-        });
+        let msg_kind = MessageKind::Broadcast(broadcast::BroadcastType::Gossip.into());
         let serialized_msg = self.create_serialized_node_message(msg, msg_kind);
 
         let mut entropy = self.entropy.clone();
