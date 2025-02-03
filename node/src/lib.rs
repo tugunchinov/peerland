@@ -85,7 +85,13 @@ impl<
         tracing::info!("start listening messages (node {})", self.id);
         loop {
             match self.recv_message().await {
-                Ok(msg) => {
+                Ok((sender, msg)) => {
+                    // TODO:
+                    if sender == self.socket.local_addr().unwrap() {
+                        tracing::warn!("skip message from myself");
+                        continue;
+                    }
+
                     // TODO: extract function
 
                     let payload = msg.payload;
@@ -106,7 +112,8 @@ impl<
                                 }
                             }
                             MessageKind::Addressed(a) => {
-                                todo!()
+                                // TODO:
+                                tracing::warn!("not implemented");
                             }
                         }
                     } else {
@@ -142,11 +149,11 @@ impl<
         Ok(())
     }
 
-    async fn recv_message(&self) -> Result<NodeMessage, NodeError> {
+    async fn recv_message(&self) -> Result<(SocketAddr, NodeMessage), NodeError> {
         // TODO: smarter bound
         const MAX_MSG_SIZE_BYTES: usize = 8 * 1024;
         let mut buf = Vec::with_capacity(MAX_MSG_SIZE_BYTES);
-        let (mut stream, _addr) = self.socket.accept().await?;
+        let (mut stream, sender) = self.socket.accept().await?;
         loop {
             let bytes_read = stream.read_buf(&mut buf).await?;
             if bytes_read == 0 {
@@ -160,7 +167,7 @@ impl<
             .adjust_from_message(&deserialized_msg);
         self.logical_time_provider.tick();
 
-        Ok(deserialized_msg)
+        Ok((sender, deserialized_msg))
     }
 
     fn create_serialized_node_message<B: AsRef<[u8]>>(

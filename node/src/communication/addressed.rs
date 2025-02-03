@@ -23,6 +23,6 @@ impl<
             MessageKind::Addressed(addressed::MessageType::Ordinary.into()),
         );
 
-        todo!()
+        self.send_serialized_message(&serialized, to).await
     }
 }

@@ -1,21 +1,16 @@
-use crate::tests::{configure_node, BrokenUnixTimeProvider};
+use crate::tests::{configure_node_static, test_setup, BrokenUnixTimeProvider};
 use crate::time::LamportClock;
 use crate::{time, Node};
-use network::discovery::StaticDiscovery;
+use network::discovery::{Discovery, StaticDiscovery};
 use network::turmoil;
 use rand::rngs::StdRng;
 use std::sync::Arc;
 
 #[test]
 fn test_gossip() {
-    use rand::SeedableRng;
+    test_setup();
 
-    tracing::subscriber::set_global_default(
-        tracing_subscriber::fmt()
-            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-            .finish(),
-    )
-    .expect("Configure tracing");
+    use rand::SeedableRng;
 
     let node_names = ["node_1", "node_2", "node_3", "node_4", "node_5"];
 
@@ -32,24 +27,35 @@ fn test_gossip() {
 
         let (tx, rx) = std::sync::mpsc::channel();
 
-        let node_routine = |node: Arc<
-            Node<
-                BrokenUnixTimeProvider<StdRng>,
-                LamportClock,
-                StaticDiscovery<(String, u16)>,
-                StdRng,
-            >,
-        >| async move {};
+        let broadcast_msg_cnt = 10;
 
-        for (i, node_name) in node_names.iter().enumerate() {
+        for (node_idx, node_name) in node_names.iter().enumerate() {
+            let node_routine = {
+                let tx = tx.clone();
+
+                move |node: Arc<
+                    Node<BrokenUnixTimeProvider<_>, LamportClock, StaticDiscovery<_>, _>,
+                >| async move {
+                    for i in 0..broadcast_msg_cnt {
+                        let msg = format!("hello from {node_idx}: {i}");
+                        node.gossip(&msg, 3).await;
+                    }
+
+                    tracing::warn!("finished spaming");
+
+                    tx.send(()).unwrap();
+
+                    std::future::pending().await
+                }
+            };
+
             matrix.host(
                 *node_name,
-                configure_node::<_, _, LamportClock, _, _, _>(
+                configure_node_static::<_, _, LamportClock, _, _>(
                     node_names.to_vec(),
-                    i,
+                    node_idx,
                     rng.clone(),
                     node_routine.clone(),
-                    tx.clone(),
                 ),
             );
         }

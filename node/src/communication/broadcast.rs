@@ -23,7 +23,10 @@ impl<
             .collect::<Vec<_>>();
         for node in nodes {
             if let Err(e) = self.send_serialized_message(&serialized_msg, node).await {
-                tracing::error!(error = %e, "failed sending message");
+                tracing::error!(
+                    error = %e,
+                    "failed sending message"
+                );
             }
         }
     }

@@ -8,7 +8,6 @@ use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -17,6 +16,22 @@ mod clocks;
 
 #[cfg(feature = "simulation")]
 mod broadcast;
+
+use std::sync::Once;
+
+static INIT: Once = Once::new();
+
+/// Setup function that is only run once, even if called multiple times.
+fn test_setup() {
+    INIT.call_once(|| {
+        tracing::subscriber::set_global_default(
+            tracing_subscriber::fmt()
+                .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+                .finish(),
+        )
+        .expect("Configure tracing");
+    });
+}
 
 pub(crate) struct BrokenUnixTimeProvider<R: Rng> {
     start_time: SystemTime,
@@ -79,12 +94,11 @@ impl<R: Rng + Send + 'static> SystemTimeProvider for BrokenUnixTimeProvider<R> {
     }
 }
 
-fn configure_node<
+fn configure_node_static<
     S: AsRef<str>,
     Ent: Rng + Clone + Send + Sync + 'static,
     LT: time::LogicalTimeProvider,
-    Res: 'static,
-    Fut: Future<Output = Res>,
+    Fut: Future<Output = ()>,
     R: FnOnce(
             Arc<Node<BrokenUnixTimeProvider<Ent>, LT, StaticDiscovery<(String, u16)>, Ent>>,
         ) -> Fut
@@ -95,7 +109,6 @@ fn configure_node<
     node_idx: usize,
     rng: Ent,
     node_routine: R,
-    tx: Sender<Res>,
 ) -> impl Fn() -> Pin<Box<dyn Future<Output = turmoil::Result>>> {
     move || {
         let mut other_nodes = Vec::with_capacity(nodes_name.len());
@@ -105,7 +118,6 @@ fn configure_node<
             }
         }
 
-        let tx = tx.clone();
         let rng = rng.clone();
         let node_routine = node_routine.clone();
         Box::pin(async move {
@@ -123,9 +135,7 @@ fn configure_node<
             .await
             .unwrap();
 
-            let res = node_routine(node).await;
-
-            tx.send(res).unwrap();
+            node_routine(node).await;
 
             Ok(())
         })

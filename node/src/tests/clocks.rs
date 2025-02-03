@@ -1,19 +1,16 @@
-use crate::tests::{configure_node, BrokenUnixTimeProvider};
+use crate::tests::{configure_node_static, test_setup, BrokenUnixTimeProvider};
 use crate::time::LamportClock;
 use crate::Node;
+use network::discovery::{Discovery, StaticDiscovery};
 use network::turmoil;
+use rand::Rng;
 use std::sync::Arc;
 
 #[test]
 fn lt_doesnt_go_backwards() {
-    use rand::SeedableRng;
+    test_setup();
 
-    tracing::subscriber::set_global_default(
-        tracing_subscriber::fmt()
-            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-            .finish(),
-    )
-    .expect("Configure tracing");
+    use rand::SeedableRng;
 
     let node_names = ["node_1", "node_2", "node_3"];
 
@@ -32,24 +29,46 @@ fn lt_doesnt_go_backwards() {
 
         let spam_msg_cnt = 100;
         for (node_idx, node_name) in node_names.iter().enumerate() {
-            let node_routine =
-                move |node: Arc<Node<BrokenUnixTimeProvider<_>, LamportClock, _, _>>| async move {
+            let node_routine = {
+                let mut rng = rng.clone();
+                let tx = tx.clone();
+
+                move |node: Arc<
+                    Node<BrokenUnixTimeProvider<_>, LamportClock, StaticDiscovery<_>, _>,
+                >| async move {
+                    let known_nodes = node
+                        .discovery
+                        .list_known_nodes()
+                        .into_iter()
+                        .collect::<Vec<_>>();
+
                     for i in 0..spam_msg_cnt {
+                        let recipient = &known_nodes[rng.gen::<usize>() % known_nodes.len()];
                         let msg = format!("hello from {node_idx}: {i}");
-                        node.gossip(msg.clone().into_bytes(), 1).await
+                        while let Err(e) = node.send_message(&msg, recipient).await {
+                            tracing::error!(
+                                error = %e,
+                                ?recipient,
+                                "failed sending message"
+                            );
+                        }
                     }
 
                     tracing::warn!("finished spaming");
-                };
+
+                    tx.send(()).unwrap();
+
+                    std::future::pending().await
+                }
+            };
 
             matrix.host(
                 *node_name,
-                configure_node::<_, _, LamportClock, _, _, _>(
+                configure_node_static::<_, _, LamportClock, _, _>(
                     node_names.to_vec(),
                     node_idx,
                     rng.clone(),
                     node_routine,
-                    tx.clone(),
                 ),
             );
         }
