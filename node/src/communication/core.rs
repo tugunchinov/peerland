@@ -75,7 +75,7 @@ impl<
                             .adjust_from_message(&deserialized_msg);
                         this.logical_time_provider.tick();
 
-                        if let Err(e) = this.process_message(sender, deserialized_msg).await {
+                        if let Err(e) = this.process_message(sender, &deserialized_msg).await {
                             tracing::error!(error = ?e, "unable to process message");
                         }
                     });
@@ -92,21 +92,19 @@ impl<
         }
     }
 
-    pub(in crate::communication) fn create_serialized_node_message<B: AsRef<[u8]>>(
+    pub(in crate::communication) fn create_node_message<B: AsRef<[u8]>>(
         &self,
         data: B,
         msg_kind: proto::message::MessageKind,
-    ) -> Vec<u8> {
+    ) -> NodeMessage {
         let ts = self.system_time_provider.now_millis().into();
 
-        let msg = NodeMessage {
+        NodeMessage {
             id: Some(uuid::Uuid::new_v4().into()),
             message_kind: Some(msg_kind),
             ts: Some(ts),
             lt: Some(self.logical_time_provider.tick().into()),
             payload: data.as_ref().to_vec(),
-        };
-
-        msg.encode_to_vec()
+        }
     }
 }

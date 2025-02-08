@@ -3,6 +3,7 @@ use crate::error::NodeError;
 use crate::{time, Node};
 use network::discovery::Discovery;
 use network::types::SocketAddr;
+use prost::Message;
 use rand::Rng;
 use std::sync::Arc;
 
@@ -14,16 +15,10 @@ impl<
     > Node<ST, LT, D, R>
 {
     pub(crate) async fn process_message(
-        self: Arc<Self>,
+        self: &Arc<Self>,
         from: SocketAddr,
-        msg: NodeMessage,
+        msg: &NodeMessage,
     ) -> Result<(), NodeError> {
-        // TODO:
-        if from == self.socket.local_addr()? {
-            tracing::warn!("skip message from myself");
-            return Ok(());
-        }
-
         // TODO:
         let Some(Ok(msg_id)) = msg.id.as_ref().map(|id| id.try_into()) else {
             tracing::warn!(sender = %from, "bad message id. skipping.");
@@ -38,7 +33,7 @@ impl<
 
         self.processed_messages.lock().await.insert(msg_id);
 
-        let payload = msg.payload;
+        let payload = &msg.payload;
 
         self.storage.lock().await.push(payload.clone());
 
@@ -49,7 +44,7 @@ impl<
                         match broadcast_type {
                             // TODO: level from message
                             broadcast::BroadcastType::Gossip => {
-                                self.gossip(payload, 2).await;
+                                self.gossip_raw(msg.encode_to_vec(), 3).await;
                             }
                         }
                     } else {

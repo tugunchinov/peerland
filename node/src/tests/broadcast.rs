@@ -38,14 +38,14 @@ fn test_gossip() {
                     Node<BrokenUnixTimeProvider<_>, LamportClock, StaticDiscovery<_>, _>,
                 >| async move {
                     for i in 0..broadcast_msg_cnt {
-                        let msg = format!("hello from {node_idx}: {i}");
-                        node.gossip(&msg, 2).await;
+                        let msg = format!("{node_idx}:{i}");
+                        node.gossip(&msg).await;
                         tokio::time::sleep(Duration::from_secs(rand::random::<u64>() % 30)).await;
                     }
 
                     tracing::warn!("finished spaming");
 
-                    tx.send(()).unwrap();
+                    tx.send(node.storage.lock().await.clone()).unwrap();
 
                     std::future::pending().await
                 }
@@ -62,15 +62,34 @@ fn test_gossip() {
             );
         }
 
+        let mut storages = Vec::with_capacity(node_names.len());
+
         let mut nodes_finished = 0;
         while nodes_finished < node_names.len() {
             matrix.run().unwrap();
 
-            if rx.try_recv().is_ok() {
+            if let Ok(storage) = rx.try_recv() {
+                storages.push(storage);
                 nodes_finished += 1;
             }
         }
 
         matrix.run().unwrap();
+
+        let mut storages_str = Vec::with_capacity(storages.len());
+
+        for storage in storages {
+            let mut storage_str = Vec::with_capacity(storage.len());
+            for msg in storage {
+                let msg_str = String::from_utf8(msg).unwrap();
+                storage_str.push(msg_str);
+            }
+            storage_str.sort();
+            storages_str.push(storage_str);
+        }
+
+        for i in 1..storages_str.len() {
+            assert_eq!(storages_str[i - 1], storages_str[i]);
+        }
     }
 }

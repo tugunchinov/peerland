@@ -2,6 +2,7 @@ use crate::error::NodeError;
 use crate::{time, Node};
 use network::discovery::Discovery;
 use network::types::ToSocketAddrs;
+use prost::Message;
 use rand::Rng;
 
 impl<
@@ -18,11 +19,12 @@ impl<
     ) -> Result<(), NodeError> {
         use crate::communication::proto::message::*;
 
-        let serialized = self.create_serialized_node_message(
+        let node_msg = self.create_node_message(
             msg,
             MessageKind::Addressed(addressed::MessageType::Ordinary.into()),
         );
 
-        self.send_serialized_message(&serialized, to).await
+        self.send_serialized_message(&node_msg.encode_to_vec(), to)
+            .await
     }
 }

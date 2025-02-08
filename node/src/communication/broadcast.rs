@@ -11,12 +11,23 @@ impl<
         R: Rng + Send + Sync + 'static + Clone,
     > Node<ST, LT, D, R>
 {
-    pub(crate) async fn gossip<B: AsRef<[u8]>>(self: &Arc<Self>, msg: B, level: usize) {
+    pub(crate) async fn gossip<B: AsRef<[u8]>>(self: &Arc<Self>, msg: B) {
         use crate::communication::proto::message::*;
 
         let msg_kind = MessageKind::Broadcast(broadcast::BroadcastType::Gossip.into());
-        let serialized_msg = self.create_serialized_node_message(msg, msg_kind);
+        let node_msg = self.create_node_message(msg, msg_kind);
 
+        // TODO: better flow
+        if let Err(e) = self
+            .process_message(self.socket.local_addr().unwrap(), &node_msg)
+            .await
+        {
+            tracing::error!(error = %e, "failed to process message. refuse broadcasting it");
+            return;
+        }
+    }
+
+    pub(crate) async fn gossip_raw(self: &Arc<Self>, serialized_msg: Vec<u8>, level: usize) {
         let mut entropy = self.entropy.clone();
         let nodes = self
             .discovery
@@ -26,7 +37,7 @@ impl<
 
         let mut tasks = JoinSet::new();
         for node in nodes {
-            let this = Arc::clone(&self);
+            let this = Arc::clone(self);
             let serialized_msg = serialized_msg.clone();
 
             tasks.spawn(async move {

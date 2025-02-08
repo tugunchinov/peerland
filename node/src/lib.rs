@@ -1,3 +1,6 @@
+// TODO: remove
+#![allow(dead_code)]
+
 mod communication;
 mod error;
 mod processing;
