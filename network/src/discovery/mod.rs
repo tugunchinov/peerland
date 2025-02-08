@@ -12,5 +12,5 @@ pub trait Discovery: Send + Sync + 'static {
         &self,
         cnt: usize,
         entropy: impl Rng,
-    ) -> impl IntoIterator<Item = impl ToSocketAddrs + Send + Debug>;
+    ) -> impl IntoIterator<Item = impl ToSocketAddrs + Send + Debug + 'static>;
 }

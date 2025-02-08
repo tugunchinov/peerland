@@ -1,10 +1,11 @@
 use crate::tests::{configure_node_static, test_setup, BrokenUnixTimeProvider};
 use crate::time::LamportClock;
-use crate::{time, Node};
-use network::discovery::{Discovery, StaticDiscovery};
+use crate::Node;
+use network::discovery::StaticDiscovery;
 use network::turmoil;
 use rand::rngs::StdRng;
 use std::sync::Arc;
+use std::time::Duration;
 
 #[test]
 fn test_gossip() {
@@ -22,13 +23,13 @@ fn test_gossip() {
         let rng = StdRng::seed_from_u64(seed);
         let boxed_rng = Box::new(rng.clone());
         let mut matrix = turmoil::Builder::new()
+            .tcp_capacity(usize::MAX >> 3)
             .enable_random_order()
             .build_with_rng(boxed_rng);
 
         let (tx, rx) = std::sync::mpsc::channel();
 
         let broadcast_msg_cnt = 10;
-
         for (node_idx, node_name) in node_names.iter().enumerate() {
             let node_routine = {
                 let tx = tx.clone();
@@ -38,7 +39,8 @@ fn test_gossip() {
                 >| async move {
                     for i in 0..broadcast_msg_cnt {
                         let msg = format!("hello from {node_idx}: {i}");
-                        node.gossip(&msg, 3).await;
+                        node.gossip(&msg, 2).await;
+                        tokio::time::sleep(Duration::from_secs(rand::random::<u64>() % 30)).await;
                     }
 
                     tracing::warn!("finished spaming");

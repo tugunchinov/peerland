@@ -14,10 +14,10 @@ pub(crate) struct LamportClock {
 #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub(crate) struct LamportClockUnit(pub(crate) (u64, u32));
 
-impl From<LamportClockUnit> for crate::proto::message::Lt {
+impl From<LamportClockUnit> for crate::communication::proto::message::Lt {
     fn from(value: LamportClockUnit) -> Self {
-        use crate::proto::message::Lt;
-        use crate::proto::time::logical::LamportClockUnit;
+        use crate::communication::proto::message::Lt;
+        use crate::communication::proto::time::logical::LamportClockUnit;
 
         Lt::LamportClock(LamportClockUnit {
             lt: value.0 .0,
@@ -62,9 +62,9 @@ impl LogicalTimeProvider for LamportClock {
         unit
     }
 
-    fn adjust_from_message(&self, msg: &crate::proto::message::NodeMessage) {
-        use crate::proto::message::Lt;
-        use crate::proto::time::logical::LamportClockUnit;
+    fn adjust_from_message(&self, msg: &crate::communication::proto::message::NodeMessage) {
+        use crate::communication::proto::message::Lt;
+        use crate::communication::proto::time::logical::LamportClockUnit;
 
         let mut current = self.counter.load(Ordering::Acquire);
         let Some(Lt::LamportClock(LamportClockUnit { lt, .. })) = msg.lt else {

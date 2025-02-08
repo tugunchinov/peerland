@@ -40,7 +40,7 @@ impl<T: ToSocketAddrs + Debug + Clone + Eq + Hash + Send + Sync + 'static> Disco
         &self,
         cnt: usize,
         mut entropy: impl Rng,
-    ) -> impl IntoIterator<Item = impl ToSocketAddrs + Send + Debug> {
+    ) -> impl IntoIterator<Item = impl ToSocketAddrs + Send + Debug + 'static> {
         let guard = self.known_nodes.read().expect("lock poisoned");
         let mut list = guard.iter().map(|v| v.clone()).collect::<Vec<T>>();
         list.shuffle(&mut entropy);

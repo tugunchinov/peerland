@@ -12,7 +12,7 @@ fn lt_doesnt_go_backwards() {
 
     use rand::SeedableRng;
 
-    let node_names = ["node_1", "node_2", "node_3"];
+    let node_names = ["node_1", "node_2", "node_3", "node_4", "node_5"];
 
     for i in 0..10 {
         let seed = rand::random();
@@ -45,7 +45,7 @@ fn lt_doesnt_go_backwards() {
                     for i in 0..spam_msg_cnt {
                         let recipient = &known_nodes[rng.gen::<usize>() % known_nodes.len()];
                         let msg = format!("hello from {node_idx}: {i}");
-                        while let Err(e) = node.send_message(&msg, recipient).await {
+                        while let Err(e) = node.send_to(recipient, &msg).await {
                             tracing::error!(
                                 error = %e,
                                 ?recipient,

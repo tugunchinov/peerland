@@ -11,12 +11,12 @@ impl<
         R: Rng + Send + Sync + 'static + Clone,
     > Node<ST, LT, D, R>
 {
-    pub async fn send_message<B: AsRef<[u8]>>(
+    pub async fn send_to<B: AsRef<[u8]>>(
         &self,
-        msg: B,
         to: impl ToSocketAddrs,
+        msg: B,
     ) -> Result<(), NodeError> {
-        use crate::proto::message::*;
+        use crate::communication::proto::message::*;
 
         let serialized = self.create_serialized_node_message(
             msg,
