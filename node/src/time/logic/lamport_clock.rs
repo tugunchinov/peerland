@@ -1,6 +1,6 @@
 use crate::time::LogicalTimeProvider;
-use crate::utils::sync::SpinLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use sync::SpinLock;
 
 pub(crate) struct LamportClock {
     /// Must be unique. Otherwise, there isn't the guarantee about strong monotonicity.
@@ -26,7 +26,6 @@ impl From<LamportClockUnit> for crate::communication::proto::message::Lt {
     }
 }
 
-// TODO: check if it's correct
 impl LogicalTimeProvider for LamportClock {
     type Unit = LamportClockUnit;
 

@@ -1,9 +1,10 @@
-use crate::tests::{configure_node_static, test_setup, BrokenUnixTimeProvider};
+use crate::tests::{
+    configure_node_static, test_setup, BrokenUnixTimeProvider, DeterministicRandomizer,
+};
 use crate::time::LamportClock;
 use crate::Node;
 use network::discovery::StaticDiscovery;
 use network::turmoil;
-use rand::rngs::StdRng;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,21 +12,22 @@ use std::time::Duration;
 fn test_gossip() {
     test_setup();
 
-    use rand::SeedableRng;
-
-    let node_names = ["node_1", "node_2", "node_3", "node_4", "node_5"];
+    let node_names = [
+        "node_1", "node_2", "node_3", "node_4", "node_5", "node_6", "node_7", "node_8", "node_9",
+        "node_10",
+    ];
 
     for i in 0..10 {
         let seed = rand::random();
 
         tracing::info!(%seed, "start {i}th simulation");
 
-        let rng = StdRng::seed_from_u64(seed);
-        let boxed_rng = Box::new(rng.clone());
+        // TODO: use Arc(Mutex) of rngs
+        let rng = DeterministicRandomizer::new(seed);
         let mut matrix = turmoil::Builder::new()
             .tcp_capacity(usize::MAX >> 3)
             .enable_random_order()
-            .build_with_rng(boxed_rng);
+            .build_with_rng(Box::new(rng.clone()));
 
         let (tx, rx) = std::sync::mpsc::channel();
 
@@ -74,7 +76,10 @@ fn test_gossip() {
             }
         }
 
-        matrix.run().unwrap();
+        // TODO: ???
+        for _ in 0..1_000 {
+            matrix.run().unwrap();
+        }
 
         let mut storages_str = Vec::with_capacity(storages.len());
 
@@ -86,6 +91,10 @@ fn test_gossip() {
             }
             storage_str.sort();
             storages_str.push(storage_str);
+        }
+
+        for s in storages_str.iter() {
+            println!("len = {}", s.len());
         }
 
         for i in 1..storages_str.len() {

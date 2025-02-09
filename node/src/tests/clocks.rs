@@ -1,4 +1,6 @@
-use crate::tests::{configure_node_static, test_setup, BrokenUnixTimeProvider};
+use crate::tests::{
+    configure_node_static, test_setup, BrokenUnixTimeProvider, DeterministicRandomizer,
+};
 use crate::time::LamportClock;
 use crate::Node;
 use network::discovery::{Discovery, StaticDiscovery};
@@ -10,8 +12,6 @@ use std::sync::Arc;
 fn lt_doesnt_go_backwards() {
     test_setup();
 
-    use rand::SeedableRng;
-
     let node_names = ["node_1", "node_2", "node_3", "node_4", "node_5"];
 
     for i in 0..10 {
@@ -19,7 +19,7 @@ fn lt_doesnt_go_backwards() {
 
         tracing::info!(%seed, "start {i}th simulation");
 
-        let rng = rand::rngs::StdRng::seed_from_u64(seed);
+        let rng = DeterministicRandomizer::new(seed);
         let boxed_rng = Box::new(rng.clone());
         let mut matrix = turmoil::Builder::new()
             .enable_random_order()

@@ -8,5 +8,8 @@ rand = "0.8.5"
 tokio = { version = "1.41.0", features = ["net"] }
 turmoil = { version = "0.6.5", optional = true }
 
+[dependencies.sync]
+path = "../sync"
+
 [features]
 simulation = ["turmoil"]

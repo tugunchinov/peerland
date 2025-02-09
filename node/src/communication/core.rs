@@ -11,34 +11,12 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::task::JoinSet;
 
 impl<
-        ST: time::SystemTimeProvider,
-        LT: time::LogicalTimeProvider,
-        D: Discovery,
-        R: Rng + Send + Sync + 'static + Clone,
+        ST: time::SystemTimeProvider + Send + Sync + 'static,
+        LT: time::LogicalTimeProvider + Send + Sync + 'static,
+        D: Discovery + Send + Sync + 'static,
+        R: Rng + Send + Sync + 'static,
     > Node<ST, LT, D, R>
 {
-    pub(in crate::communication) async fn send_serialized_message(
-        &self,
-        serialized_msg: &[u8],
-        to: impl ToSocketAddrs,
-    ) -> Result<(), NodeError> {
-        // TODO: from config
-        const TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(30);
-
-        let mut stream = tokio::time::timeout(TIMEOUT, TcpStream::connect(to)).await??;
-
-        tracing::info!(recipient = ?stream.peer_addr(), "sending message");
-
-        // TODO: From config?
-        tokio::time::timeout(
-            tokio::time::Duration::from_secs(120),
-            stream.write_all(serialized_msg),
-        )
-        .await??;
-
-        Ok(())
-    }
-
     pub(crate) async fn listen(self: Arc<Self>) {
         // TODO: smarter bound
         const MAX_MSG_SIZE_BYTES: usize = 8 * 1024;
@@ -90,6 +68,52 @@ impl<
                 while let Some(Ok(_)) = tasks.join_next().await {}
             }
         }
+    }
+}
+
+impl<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider, D: Discovery, R: Rng>
+    Node<ST, LT, D, R>
+{
+    pub(in crate::communication) async fn send_serialized_message(
+        serialized_msg: &[u8],
+        to: impl ToSocketAddrs,
+    ) -> Result<(), NodeError> {
+        // TODO: from config
+        const TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(30);
+
+        let mut stream = tokio::time::timeout(TIMEOUT, TcpStream::connect(to)).await??;
+
+        tracing::info!(recipient = ?stream.peer_addr(), "sending message");
+
+        // TODO: From config?
+        tokio::time::timeout(
+            tokio::time::Duration::from_secs(120),
+            stream.write_all(serialized_msg),
+        )
+        .await??;
+
+        Ok(())
+    }
+
+    pub(crate) async fn broadcast_to(
+        serialized_msg: Vec<u8>,
+        to: impl IntoIterator<Item = impl ToSocketAddrs + Send + 'static>,
+    ) {
+        let mut tasks = JoinSet::new();
+        for node in to {
+            let serialized_msg = serialized_msg.clone();
+
+            tasks.spawn(async move {
+                if let Err(e) = Self::send_serialized_message(&serialized_msg, node).await {
+                    tracing::error!(
+                        error = %e,
+                        "failed sending message"
+                    );
+                }
+            });
+        }
+
+        tasks.join_all().await;
     }
 
     pub(in crate::communication) fn create_node_message<B: AsRef<[u8]>>(

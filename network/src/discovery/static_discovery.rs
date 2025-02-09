@@ -1,49 +1,42 @@
 use crate::discovery::Discovery;
-use crate::types::ToSocketAddrs;
+use crate::types::SocketAddr;
 use rand::seq::SliceRandom;
 use rand::Rng;
-use std::collections::HashSet;
-use std::fmt::Debug;
-use std::hash::Hash;
+use std::ops::DerefMut;
 use std::sync::RwLock;
-// TODO: make it less restrictive?
+use sync::SpinLock;
 
-pub struct StaticDiscovery<T: ToSocketAddrs + Clone + Eq + Hash + Send + Sync + 'static> {
-    known_nodes: RwLock<HashSet<T>>,
+pub struct StaticDiscovery<R: Rng + Send + 'static> {
+    known_nodes: RwLock<Vec<SocketAddr>>,
+    // TODO: ???
+    entropy: SpinLock<R>,
 }
 
-impl<T: ToSocketAddrs + Clone + Eq + Hash + Send + Sync + 'static> StaticDiscovery<T> {
-    pub fn new(known_nodes: impl IntoIterator<Item = T>) -> Self {
+impl<R: Rng + Send + 'static> StaticDiscovery<R> {
+    pub fn new(known_nodes: impl IntoIterator<Item = SocketAddr>, entropy: R) -> Self {
         Self {
             known_nodes: RwLock::new(known_nodes.into_iter().collect()),
+            entropy: SpinLock::new(entropy),
         }
     }
 
-    pub fn add_node(&self, node: T) {
-        self.known_nodes
-            .write()
-            .expect("lock poisoned")
-            .insert(node);
+    pub fn add_node(&self, node: SocketAddr) {
+        self.known_nodes.write().expect("lock poisoned").push(node);
     }
 }
 
 // TODO: optimize
-impl<T: ToSocketAddrs + Debug + Clone + Eq + Hash + Send + Sync + 'static> Discovery
-    for StaticDiscovery<T>
-{
-    fn list_known_nodes(&self) -> impl IntoIterator<Item = impl ToSocketAddrs + Send + Debug> {
+impl<R: Rng + Send + 'static> Discovery for StaticDiscovery<R> {
+    fn list_known_nodes(&self) -> impl IntoIterator<Item = SocketAddr> {
         let guard = self.known_nodes.read().expect("lock poisoned");
-        guard.iter().map(|v| v.clone()).collect::<Vec<T>>()
+        guard.iter().cloned().collect::<Vec<_>>()
     }
 
-    fn get_random_nodes(
-        &self,
-        cnt: usize,
-        mut entropy: impl Rng,
-    ) -> impl IntoIterator<Item = impl ToSocketAddrs + Send + Debug + 'static> {
+    fn get_random_nodes(&self, cnt: usize) -> impl IntoIterator<Item = SocketAddr> {
+        // TODO: better
         let guard = self.known_nodes.read().expect("lock poisoned");
-        let mut list = guard.iter().map(|v| v.clone()).collect::<Vec<T>>();
-        list.shuffle(&mut entropy);
+        let mut list = guard.iter().cloned().collect::<Vec<_>>();
+        list.shuffle(self.entropy.lock().deref_mut());
         list.into_iter().take(cnt)
     }
 }

@@ -12,11 +12,11 @@ impl From<u128> for Millis {
     }
 }
 
-pub trait SystemTimeProvider: Send + Sync + 'static {
+pub trait SystemTimeProvider {
     fn now_millis(&self) -> Millis;
 }
 
-pub trait LogicalTimeProvider: Send + Sync + 'static {
+pub trait LogicalTimeProvider {
     type Unit: Ord + Into<crate::communication::proto::message::Lt>;
     fn new_with_id(id: u32) -> Self;
     fn tick(&self) -> Self::Unit;

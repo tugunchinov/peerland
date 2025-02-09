@@ -17,6 +17,9 @@ prost-types = "0.13.4"
 [dependencies.network]
 path = "../network"
 
+[dependencies.sync]
+path = "../sync"
+
 [features]
 simulation = ["network/simulation"]
 

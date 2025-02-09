@@ -1,23 +1,24 @@
 use crate::time::{Millis, SystemTimeProvider};
-use crate::utils::sync::SpinLock;
 use crate::{time, Node};
 use network::discovery::StaticDiscovery;
 use network::turmoil;
-use rand::Rng;
+use network::types::SocketAddr;
+use rand::rngs::StdRng;
+use rand::{Error, Rng, RngCore, SeedableRng};
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::Once;
 use std::time::SystemTime;
+use sync::SpinLock;
 
 #[cfg(feature = "simulation")]
 mod clocks;
 
 #[cfg(feature = "simulation")]
 mod broadcast;
-
-use std::sync::Once;
 
 static INIT: Once = Once::new();
 
@@ -33,6 +34,8 @@ fn test_setup() {
     });
 }
 
+// TODO: extract mod
+
 pub(crate) struct BrokenUnixTimeProvider<R: Rng> {
     start_time: SystemTime,
     last_ts: AtomicU64,
@@ -44,22 +47,19 @@ impl<R: Rng + Send + 'static> BrokenUnixTimeProvider<R> {
         let last_ts = AtomicU64::new(0);
         let start_time = SystemTime::now();
 
-        let rng = SpinLock::new(rng);
-
         Self {
             start_time,
             last_ts,
-            rng,
+            // bruh...
+            rng: SpinLock::new(rng),
         }
     }
 }
 
-impl<R: Rng + Send + 'static> SystemTimeProvider for BrokenUnixTimeProvider<R> {
+impl<R: Rng + Sync + Send + 'static> SystemTimeProvider for BrokenUnixTimeProvider<R> {
     fn now_millis(&self) -> Millis {
-        let mut rng_guard = self.rng.lock();
-        let run_faster = rng_guard.gen_bool(0.5);
-        let run_slower = rng_guard.gen_bool(0.5);
-        drop(rng_guard);
+        let run_faster = self.rng.lock().gen_bool(0.5);
+        let run_slower = self.rng.lock().gen_bool(0.5);
 
         let mut now = self.start_time.elapsed().unwrap().as_millis() as u64;
 
@@ -94,27 +94,58 @@ impl<R: Rng + Send + 'static> SystemTimeProvider for BrokenUnixTimeProvider<R> {
     }
 }
 
+#[derive(Clone)]
+struct DeterministicRandomizer {
+    rng: Arc<SpinLock<StdRng>>,
+}
+
+impl DeterministicRandomizer {
+    fn new(seed: u64) -> Self {
+        Self {
+            rng: Arc::new(SpinLock::new(StdRng::seed_from_u64(seed))),
+        }
+    }
+}
+
+impl RngCore for DeterministicRandomizer {
+    fn next_u32(&mut self) -> u32 {
+        self.rng.lock().next_u32()
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        self.rng.lock().next_u64()
+    }
+
+    fn fill_bytes(&mut self, dest: &mut [u8]) {
+        self.rng.lock().fill_bytes(dest)
+    }
+
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Error> {
+        self.rng.lock().try_fill_bytes(dest)
+    }
+}
+
 fn configure_node_static<
-    S: AsRef<str>,
-    Ent: Rng + Clone + Send + Sync + 'static,
-    LT: time::LogicalTimeProvider,
+    AsRefStr: AsRef<str>,
+    Entropy: Rng + Clone + Send + Sync + 'static,
+    LT: time::LogicalTimeProvider + Send + Sync + 'static,
     Fut: Future<Output = ()>,
     R: FnOnce(
-            Arc<Node<BrokenUnixTimeProvider<Ent>, LT, StaticDiscovery<(String, u16)>, Ent>>,
+            Arc<Node<BrokenUnixTimeProvider<Entropy>, LT, StaticDiscovery<Entropy>, Entropy>>,
         ) -> Fut
         + Clone
         + 'static,
 >(
-    nodes_name: Vec<S>,
+    nodes_name: Vec<AsRefStr>,
     node_idx: usize,
-    rng: Ent,
+    rng: Entropy,
     node_routine: R,
 ) -> impl Fn() -> Pin<Box<dyn Future<Output = turmoil::Result>>> {
     move || {
         let mut other_nodes = Vec::with_capacity(nodes_name.len());
         for (i, node_name) in nodes_name.iter().enumerate() {
             if i != node_idx {
-                other_nodes.push((node_name.as_ref().to_string(), 9000));
+                other_nodes.push((turmoil::lookup(node_name.as_ref()), 9000));
             }
         }
 
@@ -122,7 +153,8 @@ fn configure_node_static<
         let node_routine = node_routine.clone();
         Box::pin(async move {
             let time_provider = BrokenUnixTimeProvider::new(rng.clone());
-            let discovery = StaticDiscovery::new(other_nodes.clone());
+            let discovery =
+                StaticDiscovery::new(other_nodes.into_iter().map(SocketAddr::from), rng.clone());
             let entropy = rng.clone();
 
             let node = Node::<_, LT, _, _>::new(

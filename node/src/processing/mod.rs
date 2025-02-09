@@ -7,12 +7,8 @@ use prost::Message;
 use rand::Rng;
 use std::sync::Arc;
 
-impl<
-        ST: time::SystemTimeProvider,
-        LT: time::LogicalTimeProvider,
-        D: Discovery,
-        R: Rng + Send + Sync + 'static + Clone,
-    > Node<ST, LT, D, R>
+impl<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider, D: Discovery, R: Rng>
+    Node<ST, LT, D, R>
 {
     pub(crate) async fn process_message(
         self: &Arc<Self>,
@@ -44,7 +40,13 @@ impl<
                         match broadcast_type {
                             // TODO: level from message
                             broadcast::BroadcastType::Gossip => {
-                                self.gossip_raw(msg.encode_to_vec(), 3).await;
+                                let random_nodes = self.discovery.get_random_nodes(3);
+                                // TODO: better
+                                Self::broadcast_to(
+                                    msg.encode_to_vec(),
+                                    random_nodes.into_iter().collect::<Vec<_>>(),
+                                )
+                                .await;
                             }
                         }
                     } else {

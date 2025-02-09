@@ -5,12 +5,8 @@ use network::types::ToSocketAddrs;
 use prost::Message;
 use rand::Rng;
 
-impl<
-        ST: time::SystemTimeProvider,
-        LT: time::LogicalTimeProvider,
-        D: Discovery,
-        R: Rng + Send + Sync + 'static + Clone,
-    > Node<ST, LT, D, R>
+impl<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider, D: Discovery, R: Rng>
+    Node<ST, LT, D, R>
 {
     pub async fn send_to<B: AsRef<[u8]>>(
         &self,
@@ -24,7 +20,6 @@ impl<
             MessageKind::Addressed(addressed::MessageType::Ordinary.into()),
         );
 
-        self.send_serialized_message(&node_msg.encode_to_vec(), to)
-            .await
+        Self::send_serialized_message(&node_msg.encode_to_vec(), to).await
     }
 }

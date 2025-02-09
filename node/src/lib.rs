@@ -36,8 +36,6 @@ pub(crate) struct Node<
     // TODO: lock-free?
     processed_messages: Mutex<HashSet<uuid::Uuid>>,
 
-    // TODO: better
-    // known_nodes: Mutex<Vec<SocketAddr>>,
     discovery: D,
 
     system_time_provider: ST,
@@ -47,10 +45,10 @@ pub(crate) struct Node<
 }
 
 impl<
-        ST: time::SystemTimeProvider,
-        LT: time::LogicalTimeProvider,
-        D: Discovery,
-        R: Rng + Send + Sync + 'static + Clone,
+        ST: time::SystemTimeProvider + Send + Sync + 'static,
+        LT: time::LogicalTimeProvider + Send + Sync + 'static,
+        D: Discovery + Send + Sync + 'static,
+        R: Rng + Send + Sync + 'static,
     > Node<ST, LT, D, R>
 {
     pub async fn new(

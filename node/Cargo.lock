@@ -257,6 +257,7 @@ name = "network"
 version = "0.1.0"
 dependencies = [
  "rand",
+ "sync",
  "tokio",
  "turmoil",
 ]
@@ -270,6 +271,7 @@ dependencies = [
  "prost-build",
  "prost-types",
  "rand",
+ "sync",
  "thiserror",
  "tokio",
  "tracing",
@@ -634,6 +636,10 @@ dependencies = [
  "quote",
  "unicode-ident",
 ]
+
+[[package]]
+name = "sync"
+version = "0.1.0"
 
 [[package]]
 name = "tempfile"
