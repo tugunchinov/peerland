@@ -1,5 +1,5 @@
 use crate::tests::{
-    configure_node_static, test_setup, BrokenUnixTimeProvider, DeterministicRandomizer,
+    configure_node_static, test_setup, wait_nodes, BrokenUnixTimeProvider, DeterministicRandomizer,
 };
 use crate::time::LamportClock;
 use crate::Node;
@@ -56,9 +56,7 @@ fn lt_doesnt_go_backwards() {
 
                     tracing::warn!("finished spaming");
 
-                    tx.send(()).unwrap();
-
-                    std::future::pending().await
+                    tx.send(node).unwrap();
                 }
             };
 
@@ -73,15 +71,6 @@ fn lt_doesnt_go_backwards() {
             );
         }
 
-        let mut nodes_finished = 0;
-        while nodes_finished < node_names.len() {
-            matrix.run().unwrap();
-
-            if rx.try_recv().is_ok() {
-                nodes_finished += 1;
-            }
-        }
-
-        matrix.run().unwrap();
+        let _ = wait_nodes(&mut matrix, &node_names, rx);
     }
 }

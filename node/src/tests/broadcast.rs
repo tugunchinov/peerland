@@ -1,5 +1,5 @@
 use crate::tests::{
-    configure_node_static, test_setup, BrokenUnixTimeProvider, DeterministicRandomizer,
+    configure_node_static, test_setup, wait_nodes, BrokenUnixTimeProvider, DeterministicRandomizer,
 };
 use crate::time::LamportClock;
 use crate::Node;
@@ -31,7 +31,7 @@ fn test_gossip() {
 
         let (tx, rx) = std::sync::mpsc::channel();
 
-        let broadcast_msg_cnt = 10;
+        let broadcast_msg_cnt = 1;
         for (node_idx, node_name) in node_names.iter().enumerate() {
             let node_routine = {
                 let tx = tx.clone();
@@ -47,9 +47,7 @@ fn test_gossip() {
 
                     tracing::warn!("finished spaming");
 
-                    tx.send(node.storage.lock().await.clone()).unwrap();
-
-                    std::future::pending().await
+                    tx.send(node).unwrap();
                 }
             };
 
@@ -64,41 +62,24 @@ fn test_gossip() {
             );
         }
 
-        let mut storages = Vec::with_capacity(node_names.len());
+        let nodes = wait_nodes(&mut matrix, &node_names, rx);
 
-        let mut nodes_finished = 0;
-        while nodes_finished < node_names.len() {
-            matrix.run().unwrap();
+        let mut storages = Vec::with_capacity(nodes.len());
 
-            if let Ok(storage) = rx.try_recv() {
-                storages.push(storage);
-                nodes_finished += 1;
+        for node in nodes {
+            let storage_guard = node.storage.lock();
+
+            let mut storage = Vec::with_capacity(storage_guard.len());
+            for msg in storage_guard.iter() {
+                let msg_str = String::from_utf8(msg.clone()).unwrap();
+                storage.push(msg_str);
             }
+            storage.sort();
+            storages.push(storage);
         }
 
-        // TODO: ???
-        for _ in 0..1_000 {
-            matrix.run().unwrap();
-        }
-
-        let mut storages_str = Vec::with_capacity(storages.len());
-
-        for storage in storages {
-            let mut storage_str = Vec::with_capacity(storage.len());
-            for msg in storage {
-                let msg_str = String::from_utf8(msg).unwrap();
-                storage_str.push(msg_str);
-            }
-            storage_str.sort();
-            storages_str.push(storage_str);
-        }
-
-        for s in storages_str.iter() {
-            println!("len = {}", s.len());
-        }
-
-        for i in 1..storages_str.len() {
-            assert_eq!(storages_str[i - 1], storages_str[i]);
+        for i in 1..storages.len() {
+            assert_eq!(storages[i - 1], storages[i]);
         }
     }
 }

@@ -33,10 +33,24 @@ impl<
                         let mut buf = Vec::with_capacity(MAX_MSG_SIZE_BYTES);
 
                         loop {
-                            // TODO:
-                            let Ok(bytes_read) = stream.read_buf(&mut buf).await else {
-                                break;
+                            // TODO: timeout from config?
+                            let bytes_read = match tokio::time::timeout(
+                                tokio::time::Duration::from_secs(30),
+                                stream.read_buf(&mut buf),
+                            )
+                            .await
+                            {
+                                Ok(Ok(bytes_read)) => bytes_read,
+                                Ok(Err(e)) => {
+                                    tracing::error!("failed reading message: {e}");
+                                    return;
+                                }
+                                Err(e) => {
+                                    tracing::error!("failed reading message: {e}");
+                                    return;
+                                }
                             };
+
                             if bytes_read == 0 {
                                 break;
                             }
@@ -49,6 +63,7 @@ impl<
                             return;
                         };
 
+                        // TODO: add deliver function
                         this.logical_time_provider
                             .adjust_from_message(&deserialized_msg);
                         this.logical_time_provider.tick();
@@ -97,18 +112,27 @@ impl<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider, D: Discovery, 
 
     pub(crate) async fn broadcast_to(
         serialized_msg: Vec<u8>,
-        to: impl IntoIterator<Item = impl ToSocketAddrs + Send + 'static>,
+        to: impl IntoIterator<Item = impl ToSocketAddrs + Send + Clone + 'static>,
+        skip_failed: Option<bool>,
     ) {
+        let skip_failed = skip_failed.unwrap_or(false);
+
         let mut tasks = JoinSet::new();
         for node in to {
             let serialized_msg = serialized_msg.clone();
 
             tasks.spawn(async move {
-                if let Err(e) = Self::send_serialized_message(&serialized_msg, node).await {
+                while let Err(e) =
+                    Self::send_serialized_message(&serialized_msg, node.clone()).await
+                {
                     tracing::error!(
                         error = %e,
                         "failed sending message"
                     );
+
+                    if skip_failed {
+                        break;
+                    }
                 }
             });
         }

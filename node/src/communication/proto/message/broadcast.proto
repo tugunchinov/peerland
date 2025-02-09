@@ -4,4 +4,5 @@ package peerland.message.broadcast;
 
 enum BroadcastType {
     BROADCAST_TYPE_GOSSIP = 0;
+    BROADCAST_TYPE_RELIABLE = 1;
 }

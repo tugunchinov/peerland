@@ -1,6 +1,6 @@
-use crate::time::{Millis, SystemTimeProvider};
+use crate::time::{LogicalTimeProvider, Millis, SystemTimeProvider};
 use crate::{time, Node};
-use network::discovery::StaticDiscovery;
+use network::discovery::{Discovery, StaticDiscovery};
 use network::turmoil;
 use network::types::SocketAddr;
 use rand::rngs::StdRng;
@@ -63,32 +63,22 @@ impl<R: Rng + Sync + Send + 'static> SystemTimeProvider for BrokenUnixTimeProvid
 
         let mut now = self.start_time.elapsed().unwrap().as_millis() as u64;
 
-        let mut last_ts = self.last_ts.load(Ordering::Relaxed);
-        loop {
-            if now < last_ts {
-                return (last_ts as u128).into();
-            }
+        let last_ts = self.last_ts.load(Ordering::Relaxed);
+        if now < last_ts {
+            return (last_ts as u128).into();
+        }
 
-            if run_faster {
-                now += 100 + (rand::random::<u64>() % 1001); // add from 0.1 to 1 sec
-            } else if run_slower {
-                let diff = now - last_ts;
-                if diff > 0 {
-                    let mut rng_guard = self.rng.lock();
-                    now = last_ts + (rng_guard.gen::<u64>() % diff);
-                }
-            }
-
-            match self.last_ts.compare_exchange_weak(
-                last_ts,
-                now,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => break,
-                Err(actual) => last_ts = actual,
+        if run_faster {
+            now += 100 + (rand::random::<u64>() % 1001); // add from 0.1 to 1 sec
+        } else if run_slower {
+            let diff = now - last_ts;
+            if diff > 0 {
+                let mut rng_guard = self.rng.lock();
+                now = last_ts + (rng_guard.gen::<u64>() % diff);
             }
         }
+
+        self.last_ts.store(now, Ordering::Relaxed);
 
         (now as u128).into()
     }
@@ -172,4 +162,40 @@ fn configure_node_static<
             Ok(())
         })
     }
+}
+
+fn wait_nodes<ST: SystemTimeProvider, LT: LogicalTimeProvider, D: Discovery, R: Rng>(
+    matrix: &mut turmoil::Sim,
+    node_names: &[&str],
+    rx: std::sync::mpsc::Receiver<Arc<Node<ST, LT, D, R>>>,
+) -> Vec<Arc<Node<ST, LT, D, R>>> {
+    let mut nodes = Vec::with_capacity(node_names.len());
+    while nodes.len() < node_names.len() {
+        matrix.run().unwrap();
+
+        while let Ok(node) = rx.try_recv() {
+            nodes.push(node);
+        }
+    }
+
+    // make sure everyone has finished
+    loop {
+        let mut done = true;
+
+        for node in nodes.iter() {
+            // 1 listening + 1 here
+            if Arc::strong_count(&node) > 2 {
+                done = false;
+                break;
+            }
+        }
+
+        if done {
+            break;
+        }
+
+        matrix.run().unwrap();
+    }
+
+    nodes
 }

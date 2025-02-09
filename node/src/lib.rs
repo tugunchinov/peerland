@@ -17,6 +17,7 @@ use network::types::*;
 use rand::Rng;
 use std::collections::HashSet;
 use std::sync::Arc;
+use sync::SpinLock;
 use tokio::sync::Mutex;
 
 pub(crate) struct Node<
@@ -31,7 +32,7 @@ pub(crate) struct Node<
     socket: TcpListener,
 
     // TODO: make service
-    storage: Mutex<Vec<Vec<u8>>>,
+    storage: SpinLock<Vec<Vec<u8>>>,
 
     // TODO: lock-free?
     processed_messages: Mutex<HashSet<uuid::Uuid>>,
@@ -65,7 +66,7 @@ impl<
         let node = Arc::new(Self {
             id,
             socket,
-            storage: Mutex::new(vec![]),
+            storage: SpinLock::new(vec![]),
             processed_messages: Default::default(),
             discovery,
             system_time_provider: time_provider,

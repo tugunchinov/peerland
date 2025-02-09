@@ -21,17 +21,21 @@ impl<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider, D: Discovery, 
             return Ok(());
         };
 
-        if self.processed_messages.lock().await.contains(&msg_id) {
-            // Processed
-            tracing::warn!(message_id = %msg_id, "already processed. skipping.");
-            return Ok(());
-        };
+        {
+            let mut processed_messages_guard = self.processed_messages.lock().await;
 
-        self.processed_messages.lock().await.insert(msg_id);
+            if processed_messages_guard.contains(&msg_id) {
+                // Processed
+                tracing::warn!(message_id = %msg_id, "already processed. skipping.");
+                return Ok(());
+            };
+
+            processed_messages_guard.insert(msg_id);
+        }
 
         let payload = &msg.payload;
 
-        self.storage.lock().await.push(payload.clone());
+        self.storage.lock().push(payload.clone());
 
         if let Some(msg_kind) = msg.message_kind {
             match msg_kind {
@@ -40,11 +44,22 @@ impl<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider, D: Discovery, 
                         match broadcast_type {
                             // TODO: level from message
                             broadcast::BroadcastType::Gossip => {
-                                let random_nodes = self.discovery.get_random_nodes(3);
+                                let random_nodes = self.discovery.get_random_nodes(5);
                                 // TODO: better
                                 Self::broadcast_to(
                                     msg.encode_to_vec(),
                                     random_nodes.into_iter().collect::<Vec<_>>(),
+                                    Some(true),
+                                )
+                                .await;
+                            }
+                            broadcast::BroadcastType::Reliable => {
+                                let nodes = self.discovery.list_known_nodes();
+                                // TODO: better
+                                Self::broadcast_to(
+                                    msg.encode_to_vec(),
+                                    nodes.into_iter().collect::<Vec<_>>(),
+                                    Some(false),
                                 )
                                 .await;
                             }
