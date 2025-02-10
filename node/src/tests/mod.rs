@@ -178,23 +178,31 @@ fn wait_nodes<ST: SystemTimeProvider, LT: LogicalTimeProvider, D: Discovery, R: 
         }
     }
 
+    let now = std::time::Instant::now();
+
     // make sure everyone has finished
     loop {
         let mut done = true;
 
         for node in nodes.iter() {
             // 1 listening + 1 here
-            if Arc::strong_count(&node) > 2 {
+            if Arc::strong_count(node) > 2 {
                 done = false;
                 break;
             }
         }
 
-        if done {
-            break;
-        }
+        // if done {
+        //     break;
+        // }
 
         matrix.run().unwrap();
+
+        let elapsed = now.elapsed().as_secs();
+        if elapsed > 20 {
+            tracing::info!("Testing too long... Give up.");
+            break;
+        }
     }
 
     nodes

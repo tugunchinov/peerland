@@ -1,6 +1,8 @@
 // TODO: remove
 #![allow(dead_code)]
 
+const DEFAULT_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(20);
+
 mod communication;
 mod error;
 mod processing;
@@ -12,20 +14,14 @@ mod tests;
 
 use crate::error::NodeError;
 use communication::proto;
-use network::discovery::Discovery;
 use network::types::*;
 use rand::Rng;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use sync::SpinLock;
 use tokio::sync::Mutex;
 
-pub(crate) struct Node<
-    ST: time::SystemTimeProvider,
-    LT: time::LogicalTimeProvider,
-    D: Discovery,
-    R: Rng,
-> {
+pub(crate) struct Node<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider, R: Rng> {
     id: u32,
 
     // TODO: use custom protocol over UDP?
@@ -37,7 +33,7 @@ pub(crate) struct Node<
     // TODO: lock-free?
     processed_messages: Mutex<HashSet<uuid::Uuid>>,
 
-    discovery: D,
+    established_connections: SpinLock<HashMap<SocketAddr, Arc<TcpStream>>>,
 
     system_time_provider: ST,
     logical_time_provider: LT,
@@ -48,15 +44,13 @@ pub(crate) struct Node<
 impl<
         ST: time::SystemTimeProvider + Send + Sync + 'static,
         LT: time::LogicalTimeProvider + Send + Sync + 'static,
-        D: Discovery + Send + Sync + 'static,
         R: Rng + Send + Sync + 'static,
-    > Node<ST, LT, D, R>
+    > Node<ST, LT, R>
 {
     pub async fn new(
         id: u32,
         addr: impl ToSocketAddrs,
         time_provider: ST,
-        discovery: D,
         entropy: R,
     ) -> Result<Arc<Self>, NodeError> {
         let socket = TcpListener::bind(addr).await?;
@@ -67,8 +61,8 @@ impl<
             id,
             socket,
             storage: SpinLock::new(vec![]),
-            processed_messages: Default::default(),
-            discovery,
+            processed_messages: Mutex::new(HashSet::new()),
+            established_connections: SpinLock::new(HashMap::new()),
             system_time_provider: time_provider,
             logical_time_provider,
             entropy,

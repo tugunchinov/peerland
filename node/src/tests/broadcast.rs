@@ -25,7 +25,8 @@ fn test_gossip() {
         // TODO: use Arc(Mutex) of rngs
         let rng = DeterministicRandomizer::new(seed);
         let mut matrix = turmoil::Builder::new()
-            .tcp_capacity(usize::MAX >> 3)
+            .fail_rate(0.0)
+            .udp_capacity(usize::MAX >> 3)
             .enable_random_order()
             .build_with_rng(Box::new(rng.clone()));
 
@@ -42,7 +43,7 @@ fn test_gossip() {
                     for i in 0..broadcast_msg_cnt {
                         let msg = format!("{node_idx}:{i}");
                         node.gossip(&msg).await;
-                        tokio::time::sleep(Duration::from_secs(rand::random::<u64>() % 30)).await;
+                        tokio::time::sleep(Duration::from_secs(rand::random::<u64>() % 10)).await;
                     }
 
                     tracing::warn!("finished spaming");

@@ -1,14 +1,9 @@
-#[cfg(not(feature = "simulation"))]
-pub type UdpSocket = tokio::net::UdpSocket;
-#[cfg(feature = "simulation")]
-pub type UdpSocket = turmoil::net::UdpSocket;
-
 pub type SocketAddr = std::net::SocketAddr;
 
 #[cfg(not(feature = "simulation"))]
-pub type TcpListener = tokio::net::TcpListener;
+pub use tokio::net::*;
 #[cfg(feature = "simulation")]
-pub type TcpListener = turmoil::net::TcpListener;
+pub use turmoil::net::*;
 
 #[cfg(not(feature = "simulation"))]
 pub type TcpStream = tokio::net::TcpStream;

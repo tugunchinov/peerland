@@ -1,18 +1,12 @@
 use crate::error::NodeError;
 use crate::{time, Node};
-use network::discovery::Discovery;
-use network::types::ToSocketAddrs;
+use network::types::SocketAddr;
 use prost::Message;
 use rand::Rng;
+use std::fmt::Debug;
 
-impl<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider, D: Discovery, R: Rng>
-    Node<ST, LT, D, R>
-{
-    pub async fn send_to<B: AsRef<[u8]>>(
-        &self,
-        to: impl ToSocketAddrs,
-        msg: B,
-    ) -> Result<(), NodeError> {
+impl<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider, R: Rng> Node<ST, LT, R> {
+    pub async fn send_to<B: AsRef<[u8]>>(&self, to: &SocketAddr, msg: B) -> Result<(), NodeError> {
         use crate::communication::proto::message::*;
 
         let node_msg = self.create_node_message(
@@ -20,6 +14,7 @@ impl<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider, D: Discovery, 
             MessageKind::Addressed(addressed::MessageType::Ordinary.into()),
         );
 
-        Self::send_serialized_message(&node_msg.encode_to_vec(), to).await
+        self.send_serialized_message(&node_msg.encode_to_vec(), to)
+            .await
     }
 }

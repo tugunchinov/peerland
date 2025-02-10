@@ -1,11 +1,13 @@
 use crate::communication::proto::message::MessageKind;
 use crate::{time, Node};
-use network::discovery::Discovery;
 use rand::Rng;
 use std::sync::Arc;
 
-impl<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider, D: Discovery, R: Rng>
-    Node<ST, LT, D, R>
+impl<
+        ST: time::SystemTimeProvider + Send + Sync + 'static,
+        LT: time::LogicalTimeProvider + Send + Sync + 'static,
+        R: Rng + Send + Sync + 'static,
+    > Node<ST, LT, R>
 {
     // TODO: better
 

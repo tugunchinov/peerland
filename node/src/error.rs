@@ -3,13 +3,7 @@ pub enum NodeError {
     #[error("timed out: {0}")]
     Timeout(#[from] tokio::time::error::Elapsed),
     #[error("io error: {0:?}")]
-    IOError(std::io::Error),
-}
-
-impl From<std::io::Error> for NodeError {
-    fn from(value: std::io::Error) -> Self {
-        Self::IOError(value)
-    }
+    IOError(#[from] std::io::Error),
 }
 
 impl From<std::str::Utf8Error> for NodeError {

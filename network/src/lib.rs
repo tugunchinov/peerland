@@ -1,4 +1,6 @@
-pub mod discovery;
+mod connection;
+
+// TODO: better name
 pub mod types;
 
 #[cfg(feature = "simulation")]
