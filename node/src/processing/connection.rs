@@ -15,7 +15,7 @@ impl<
         let peer = connection.peer_addr();
         loop {
             match connection.read_u64_le().await {
-                Ok(msg_size) => match connection.read_buf(msg_size as usize).await {
+                Ok(msg_size) => match connection.read_exact(msg_size as usize).await {
                     Ok(serialized_msg) => {
                         let Ok(deserialized_msg) = NodeMessage::decode(serialized_msg.as_slice())
                         else {

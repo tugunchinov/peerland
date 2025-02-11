@@ -71,10 +71,15 @@ impl<
             entropy: SpinLock::new(entropy),
         });
 
+        {
+            let node = Arc::clone(&node);
+            tokio::spawn(async move { node.accept_connections().await });
+        }
+
         let my_address = node.socket.local_addr()?;
 
         for peer in peers {
-            if peer != my_address {
+            if peer.ip() != my_address.ip() {
                 match node.establish_connection(peer).await {
                     Ok(connection) => {
                         let node = Arc::clone(&node);
@@ -85,11 +90,6 @@ impl<
                     }
                 }
             }
-        }
-
-        {
-            let node = Arc::clone(&node);
-            tokio::spawn(async move { node.accept_connections().await });
         }
 
         Ok(node)

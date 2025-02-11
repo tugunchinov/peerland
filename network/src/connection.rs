@@ -14,6 +14,13 @@ struct Request<D, Res> {
     cancel_token: tokio_util::sync::CancellationToken,
 }
 
+// TODO:
+enum ReadCommand {
+    ReadBuf,
+    ReadExact,
+    ReadU64LE,
+}
+
 // TODO: use bounded channels
 pub struct Connection {
     tx_write: UnboundedSender<Request<Vec<u8>, ()>>,
@@ -21,6 +28,7 @@ pub struct Connection {
     peer_addr: SocketAddr,
 }
 
+// TODO: read_exact is not cancel-safe!!
 impl Connection {
     pub async fn establish(with: SocketAddr) -> Result<Arc<Self>, std::io::Error> {
         let stream = TcpStream::connect(with).await?;
@@ -51,9 +59,10 @@ impl Connection {
     }
 
     pub async fn read_u64_le(&self) -> std::io::Result<u64> {
-        let buf = self.read_buf(8).await?;
+        let buf = self.read_exact(8).await?;
 
         if buf.len() != 8 {
+            println!("READ: {}", buf.len());
             return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof));
         }
 
@@ -81,7 +90,7 @@ impl Connection {
         }
     }
 
-    pub fn read_buf(&self, size: usize) -> impl Future<Output = std::io::Result<Vec<u8>>> {
+    pub fn read_exact(&self, size: usize) -> impl Future<Output = std::io::Result<Vec<u8>>> {
         let tx = self.tx_read.clone();
 
         async move {
@@ -137,7 +146,7 @@ impl Connection {
                 let mut buf = vec![0; size];
 
                 tokio::select! {
-                    result = reader.read_buf(&mut buf) => {
+                    result = reader.read_exact(&mut buf) => {
                         match result {
                             Ok(bytes_read) => {
                                 buf.truncate(bytes_read);

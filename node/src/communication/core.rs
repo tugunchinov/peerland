@@ -21,6 +21,8 @@ impl<
             match self.socket.accept().await {
                 Ok((stream, peer)) => match Connection::from_stream(stream) {
                     Ok(connection) => {
+                        tracing::info!(%peer, "new connection established");
+
                         self.established_connections
                             .lock()
                             .insert(peer, Arc::clone(&connection));

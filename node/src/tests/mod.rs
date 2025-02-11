@@ -2,8 +2,7 @@ use crate::time::{LogicalTimeProvider, Millis, SystemTimeProvider};
 use crate::Node;
 use network::turmoil;
 use network::types::SocketAddr;
-use rand::rngs::StdRng;
-use rand::{Error, Rng, RngCore, SeedableRng};
+use rand::Rng;
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr};
 use std::pin::Pin;
@@ -83,88 +82,34 @@ impl<R: Rng + Sync + Send + 'static> SystemTimeProvider for BrokenUnixTimeProvid
     }
 }
 
-#[derive(Clone)]
-struct DeterministicRandomizer {
-    rng: Arc<SpinLock<StdRng>>,
-}
-
-impl DeterministicRandomizer {
-    fn new(seed: u64) -> Self {
-        Self {
-            rng: Arc::new(SpinLock::new(StdRng::seed_from_u64(seed))),
-        }
-    }
-}
-
-impl RngCore for DeterministicRandomizer {
-    fn next_u32(&mut self) -> u32 {
-        self.rng.lock().next_u32()
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        self.rng.lock().next_u64()
-    }
-
-    fn fill_bytes(&mut self, dest: &mut [u8]) {
-        self.rng.lock().fill_bytes(dest)
-    }
-
-    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Error> {
-        self.rng.lock().try_fill_bytes(dest)
-    }
-}
-
-async fn setup_nodes<
+fn configure_node<
     AsRefStr: AsRef<str>,
     Entropy: Rng + Clone + Send + Sync + 'static,
     LT: LogicalTimeProvider + Send + Sync + 'static,
     Fut: Future<Output = ()>,
     R: FnOnce(Arc<Node<BrokenUnixTimeProvider<Entropy>, LT, Entropy>>) -> Fut + Clone + 'static,
 >(
-    nodes_name: &[AsRefStr],
-    rng: Entropy,
-    result: std::sync::mpsc::Sender<Vec<Arc<Node<BrokenUnixTimeProvider<Entropy>, LT, Entropy>>>>,
-) {
-    let mut nodes = Vec::with_capacity(nodes_name.len());
-
-    for (node_idx, _node_name) in nodes_name.iter().enumerate() {
-        let peers = node_names_to_addresses(nodes_name.clone());
-        let time_provider = BrokenUnixTimeProvider::new(rng.clone());
-        let entropy = rng.clone();
-
-        let node = Node::<_, _, _>::new(
-            node_idx as u32,
-            (IpAddr::from(Ipv4Addr::UNSPECIFIED), 9000),
-            time_provider,
-            entropy,
-            peers.into_iter(),
-        )
-        .await
-        .unwrap();
-
-        nodes.push(node);
-    }
-
-    result.send(nodes).unwrap()
-}
-
-fn configure_node_static<
-    AsRefStr: AsRef<str>,
-    Entropy: Rng + Clone + Send + Sync + 'static,
-    LT: LogicalTimeProvider + Send + Sync + 'static,
-    Fut: Future<Output = ()>,
-    R: FnOnce(Arc<Node<BrokenUnixTimeProvider<Entropy>, LT, Entropy>>) -> Fut + Clone + 'static,
->(
-    nodes_name: impl Iterator<Item = AsRefStr> + Clone,
+    node_names: &'static [AsRefStr],
     node_idx: usize,
     rng: Entropy,
     node_routine: R,
+    barrier: Arc<tokio::sync::Barrier>,
+    node_ready: std::sync::mpsc::Sender<()>,
 ) -> impl Fn() -> Pin<Box<dyn Future<Output = turmoil::Result>>> {
     move || {
-        let peers = node_names_to_addresses(nodes_name.clone());
+        let others = node_names
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != node_idx)
+            .map(|(_, n)| n)
+            .collect::<Vec<_>>();
+
+        let peers = node_names_to_addresses(&others);
 
         let rng = rng.clone();
         let node_routine = node_routine.clone();
+        let node_ready = node_ready.clone();
+        let barrier = barrier.clone();
         Box::pin(async move {
             let time_provider = BrokenUnixTimeProvider::new(rng.clone());
             let entropy = rng.clone();
@@ -179,6 +124,9 @@ fn configure_node_static<
             .await
             .unwrap();
 
+            node_ready.send(()).unwrap();
+
+            barrier.wait().await;
             node_routine(node).await;
 
             Ok(())
@@ -186,7 +134,7 @@ fn configure_node_static<
     }
 }
 
-fn node_names_to_addresses<S: AsRef<str>>(node_names: impl Iterator<Item = S>) -> Vec<SocketAddr> {
+fn node_names_to_addresses<S: AsRef<str>>(node_names: &[S]) -> Vec<SocketAddr> {
     let mut addresses = Vec::with_capacity(256);
     for node_name in node_names {
         addresses.push(SocketAddr::from((
@@ -203,6 +151,8 @@ fn wait_nodes<ST: SystemTimeProvider, LT: LogicalTimeProvider, R: Rng>(
     node_names: &[&str],
     rx: std::sync::mpsc::Receiver<Arc<Node<ST, LT, R>>>,
 ) -> Vec<Arc<Node<ST, LT, R>>> {
+    let expected_count = /* connections + accept */ node_names.len() + /* here from closure */ 1;
+
     let mut nodes = Vec::with_capacity(node_names.len());
     while nodes.len() < node_names.len() {
         matrix.run().unwrap();
@@ -220,7 +170,8 @@ fn wait_nodes<ST: SystemTimeProvider, LT: LogicalTimeProvider, R: Rng>(
 
         for node in nodes.iter() {
             // 1 listening + 1 here
-            if Arc::strong_count(node) > 2 {
+            if Arc::strong_count(node) > expected_count {
+                println!("{}", Arc::strong_count(node));
                 done = false;
                 break;
             }

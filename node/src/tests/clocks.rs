@@ -1,11 +1,9 @@
-use crate::tests::{
-    configure_node_static, node_names_to_addresses, setup_hosts, setup_nodes, test_setup,
-    wait_nodes, BrokenUnixTimeProvider, DeterministicRandomizer,
-};
+use crate::tests::{configure_node, test_setup, wait_nodes, BrokenUnixTimeProvider};
 use crate::time::LamportClock;
-use crate::{time, Node};
+use crate::Node;
 use network::turmoil;
-use rand::Rng;
+use rand::prelude::StdRng;
+use rand::{Rng, SeedableRng};
 use std::sync::Arc;
 
 const NODE_NAMES: [&str; 5] = ["node_1", "node_2", "node_3", "node_4", "node_5"];
@@ -19,75 +17,65 @@ fn lt_doesnt_go_backwards() {
 
         tracing::info!(%seed, "start {i}th simulation");
 
-        let rng = DeterministicRandomizer::new(seed);
-        let boxed_rng = Box::new(rng.clone());
+        let mut common_rng = StdRng::seed_from_u64(seed);
+
+        let matrix_rng = Box::new(StdRng::seed_from_u64(common_rng.gen()));
         let mut matrix = turmoil::Builder::new()
             .enable_random_order()
-            .build_with_rng(boxed_rng);
-
-        let (tx, rx) = std::sync::mpsc::channel();
-        matrix.host("setup", setup_nodes(&NODE_NAMES, rng.clone(), tx));
-
-        let nodes = loop {
-            matrix.run().unwrap();
-
-            let maybe_nodes = rx.try_recv();
-            if let Ok(nodes) = maybe_nodes {
-                break nodes;
-            }
-        };
+            .build_with_rng(matrix_rng);
 
         let (tx, rx) = std::sync::mpsc::channel();
 
         let spam_msg_cnt = 100;
-        for (i, node) in nodes.enumerate() {
+        let barrier = Arc::new(tokio::sync::Barrier::new(NODE_NAMES.len()));
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+
+        for (node_idx, node_name) in NODE_NAMES.iter().enumerate() {
+            let node_routine = {
+                let tx = tx.clone();
+                let mut routine_rng = StdRng::seed_from_u64(common_rng.gen());
+
+                move |node: Arc<Node<BrokenUnixTimeProvider<_>, LamportClock, _>>| async move {
+                    for i in 0..spam_msg_cnt {
+                        let msg = format!("hello from {}: {i}", node.id);
+                        while let Err(e) = node.gossip(msg.clone()).await {
+                            tracing::error!(
+                                error = %e,
+                                "failed gossiping message"
+                            );
+                        }
+
+                        tokio::time::sleep(tokio::time::Duration::from_secs(
+                            routine_rng.gen::<u64>() % 15,
+                        ))
+                        .await;
+                    }
+
+                    tracing::warn!("finished spaming");
+
+                    tx.send(node).unwrap();
+                }
+            };
+
+            let node_rng = StdRng::seed_from_u64(common_rng.gen());
+
             matrix.host(
-                NODE_NAMES[i],
-                configure_node_static::<_, _, LamportClock, _, _>(
-                    node_names.iter(),
+                *node_name,
+                configure_node::<_, _, LamportClock, _, _>(
+                    &NODE_NAMES,
                     node_idx,
-                    rng.clone(),
+                    node_rng,
                     node_routine,
+                    barrier.clone(),
+                    ready_tx.clone(),
                 ),
             );
 
-            // Connect nodes
-            for _ in 0..1_000_000 {
+            while ready_rx.try_recv().is_err() {
                 matrix.run().unwrap();
             }
         }
 
-        panic!("AAAA");
-
-        let _ = wait_nodes(&mut matrix, &node_names, rx);
+        let _ = wait_nodes(&mut matrix, &NODE_NAMES, rx);
     }
-}
-
-async fn start_sending_messages<
-    ST: time::SystemTimeProvider,
-    LT: time::LogicalTimeProvider,
-    R: Rng,
->(
-    node: Arc<Node<ST, LT, R>>,
-    msg_cnt: usize,
-    mut rng: R,
-    ready: std::sync::mpsc::Sender<Arc<Node<ST, LT, R>>>,
-) {
-    let known_nodes = node_names_to_addresses(NODE_NAMES.iter());
-
-    for i in 0..msg_cnt {
-        let recipient = &known_nodes[rng.gen::<usize>() % known_nodes.len()];
-        let msg = format!("hello from {node_idx}: {i}");
-        while let Err(e) = node.send_to(*recipient, &msg).await {
-            tracing::error!(
-                error = %e,
-                ?recipient,
-                "failed sending message"
-            );
-        }
-    }
-
-    tracing::warn!("finished spaming");
-
-    ready.send(node).unwrap();
 }

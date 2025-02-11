@@ -21,7 +21,7 @@ impl<
     ) -> Result<(), NodeError> {
         // TODO:
         let Some(Ok(msg_id)) = msg.id.as_ref().map(|id| id.try_into()) else {
-            tracing::warn!(sender = %from, "bad message id. skipping.");
+            tracing::error!(sender = %from, "bad message id. skipping.");
             return Ok(());
         };
 
@@ -43,40 +43,40 @@ impl<
         if let Some(msg_kind) = msg.message_kind {
             match msg_kind {
                 MessageKind::Broadcast(b) => {
-                    if let Ok(broadcast_type) = b.try_into() {
-                        let mut all_peers = self
-                            .established_connections
-                            .lock()
-                            .keys()
-                            .cloned()
-                            .collect::<Vec<_>>();
-
-                        match broadcast_type {
-                            // TODO: broadcast number from message
-                            broadcast::BroadcastType::Gossip => {
-                                all_peers.shuffle(self.entropy.lock().deref_mut());
-                                all_peers.truncate(5);
-
-                                // TODO: better
-                                self.broadcast_to(
-                                    msg.encode_to_vec(),
-                                    all_peers.into_iter(),
-                                    Some(true),
-                                )
-                                .await;
-                            }
-                            broadcast::BroadcastType::Reliable => {
-                                // TODO: better
-                                self.broadcast_to(
-                                    msg.encode_to_vec(),
-                                    all_peers.into_iter(),
-                                    Some(false),
-                                )
-                                .await;
-                            }
-                        }
-                    } else {
+                    let Ok(broadcast_type) = b.try_into() else {
                         unreachable!()
+                    };
+
+                    let mut all_peers = self
+                        .established_connections
+                        .lock()
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<_>>();
+
+                    match broadcast_type {
+                        // TODO: broadcast number from message
+                        broadcast::BroadcastType::Gossip => {
+                            all_peers.shuffle(self.entropy.lock().deref_mut());
+                            all_peers.truncate(3);
+
+                            // TODO: better
+                            self.broadcast_to(
+                                msg.encode_to_vec(),
+                                all_peers.into_iter(),
+                                Some(true),
+                            )
+                            .await;
+                        }
+                        broadcast::BroadcastType::Reliable => {
+                            // TODO: better
+                            self.broadcast_to(
+                                msg.encode_to_vec(),
+                                all_peers.into_iter(),
+                                Some(false),
+                            )
+                            .await;
+                        }
                     }
                 }
                 MessageKind::Addressed(_a) => {
@@ -85,7 +85,7 @@ impl<
                 }
             }
         } else {
-            tracing::warn!(msg_id = ?msg.id, "unknown message kind");
+            tracing::error!(msg_id = ?msg.id, "unknown message kind");
         }
 
         Ok(())
