@@ -3,7 +3,6 @@ use crate::tests::{
 };
 use crate::time::LamportClock;
 use crate::Node;
-use network::discovery::StaticDiscovery;
 use network::turmoil;
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,7 +25,7 @@ fn test_gossip() {
         let rng = DeterministicRandomizer::new(seed);
         let mut matrix = turmoil::Builder::new()
             .fail_rate(0.0)
-            .udp_capacity(usize::MAX >> 3)
+            .tcp_capacity(usize::MAX >> 3)
             .enable_random_order()
             .build_with_rng(Box::new(rng.clone()));
 
@@ -37,12 +36,10 @@ fn test_gossip() {
             let node_routine = {
                 let tx = tx.clone();
 
-                move |node: Arc<
-                    Node<BrokenUnixTimeProvider<_>, LamportClock, StaticDiscovery<_>, _>,
-                >| async move {
+                move |node: Arc<Node<BrokenUnixTimeProvider<_>, LamportClock, _>>| async move {
                     for i in 0..broadcast_msg_cnt {
                         let msg = format!("{node_idx}:{i}");
-                        node.gossip(&msg).await;
+                        node.gossip(&msg).await.unwrap();
                         tokio::time::sleep(Duration::from_secs(rand::random::<u64>() % 10)).await;
                     }
 
@@ -55,7 +52,7 @@ fn test_gossip() {
             matrix.host(
                 *node_name,
                 configure_node_static::<_, _, LamportClock, _, _>(
-                    node_names.to_vec(),
+                    node_names.iter(),
                     node_idx,
                     rng.clone(),
                     node_routine.clone(),

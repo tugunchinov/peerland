@@ -15,6 +15,7 @@ mod tests;
 use crate::error::NodeError;
 use communication::proto;
 use network::types::*;
+use network::Connection;
 use rand::Rng;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -33,12 +34,13 @@ pub(crate) struct Node<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvid
     // TODO: lock-free?
     processed_messages: Mutex<HashSet<uuid::Uuid>>,
 
-    established_connections: SpinLock<HashMap<SocketAddr, Arc<TcpStream>>>,
+    // TODO: lock-free?
+    established_connections: SpinLock<HashMap<SocketAddr, Arc<Connection>>>,
 
     system_time_provider: ST,
     logical_time_provider: LT,
 
-    entropy: R,
+    entropy: SpinLock<R>,
 }
 
 impl<
@@ -52,6 +54,7 @@ impl<
         addr: impl ToSocketAddrs,
         time_provider: ST,
         entropy: R,
+        peers: impl Iterator<Item = SocketAddr>,
     ) -> Result<Arc<Self>, NodeError> {
         let socket = TcpListener::bind(addr).await?;
 
@@ -65,12 +68,28 @@ impl<
             established_connections: SpinLock::new(HashMap::new()),
             system_time_provider: time_provider,
             logical_time_provider,
-            entropy,
+            entropy: SpinLock::new(entropy),
         });
+
+        let my_address = node.socket.local_addr()?;
+
+        for peer in peers {
+            if peer != my_address {
+                match node.establish_connection(peer).await {
+                    Ok(connection) => {
+                        let node = Arc::clone(&node);
+                        tokio::spawn(async move { node.process_connection(connection).await });
+                    }
+                    Err(e) => {
+                        tracing::error!(%peer, error = %e, "failed establishing connection connection");
+                    }
+                }
+            }
+        }
 
         {
             let node = Arc::clone(&node);
-            tokio::spawn(async move { node.listen().await });
+            tokio::spawn(async move { node.accept_connections().await });
         }
 
         Ok(node)

@@ -7,7 +7,6 @@ edition = "2021"
 rand = "0.8.5"
 tokio = { version = "1.41.0", features = ["net", "sync", "io-util", "macros", "rt-multi-thread"] }
 turmoil = { version = "0.6.5", optional = true }
-tracing = "0.1.41"
 tokio-util = "0.7.13"
 
 [dependencies.sync]

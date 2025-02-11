@@ -8,49 +8,59 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
 
-struct Request<Buf, Res> {
-    buf: Buf,
+struct Request<D, Res> {
+    data: D,
     response: oneshot::Sender<std::io::Result<Res>>,
     cancel_token: tokio_util::sync::CancellationToken,
 }
 
 // TODO: use bounded channels
 pub struct Connection {
-    tx_write: UnboundedSender<Request<&'static [u8], ()>>,
-    tx_read: UnboundedSender<Request<&'static mut [u8], usize>>,
+    tx_write: UnboundedSender<Request<Vec<u8>, ()>>,
+    tx_read: UnboundedSender<Request<usize, Vec<u8>>>,
+    peer_addr: SocketAddr,
 }
 
 impl Connection {
-    async fn establish(with: &SocketAddr) -> Result<Arc<Self>, std::io::Error> {
-        tracing::info!(peer = %with, "trying to establish a connection");
+    pub async fn establish(with: SocketAddr) -> Result<Arc<Self>, std::io::Error> {
+        let stream = TcpStream::connect(with).await?;
 
-        let connection = TcpStream::connect(with).await?;
-
-        let (reader, writer) = connection.into_split();
-
-        let (tx_write, rx_write) = unbounded_channel();
-        tokio::spawn(Self::process_writes(writer, *with, rx_write));
-
-        let (tx_read, rx_read) = unbounded_channel();
-        tokio::spawn(Self::process_reads(reader, *with, rx_read));
-
-        tracing::info!(peer = %with, "connection established");
-
-        Ok(Arc::new(Self { tx_write, tx_read }))
+        Self::from_stream(stream)
     }
 
-    async fn read_u64_le(&self) -> std::io::Result<u64> {
-        let mut buf = [0u8; 8];
-        let bytes_read = self.read_buf(&mut buf).await?;
+    pub fn from_stream(stream: TcpStream) -> Result<Arc<Self>, std::io::Error> {
+        let peer_addr = stream.peer_addr()?;
 
-        if bytes_read != 8 {
+        let (reader, writer) = stream.into_split();
+
+        let (tx_write, rx_write) = unbounded_channel();
+        tokio::spawn(Self::process_writes(writer, rx_write));
+
+        let (tx_read, rx_read) = unbounded_channel();
+        tokio::spawn(Self::process_reads(reader, rx_read));
+
+        Ok(Arc::new(Self {
+            tx_write,
+            tx_read,
+            peer_addr,
+        }))
+    }
+
+    pub fn peer_addr(&self) -> SocketAddr {
+        self.peer_addr
+    }
+
+    pub async fn read_u64_le(&self) -> std::io::Result<u64> {
+        let buf = self.read_buf(8).await?;
+
+        if buf.len() != 8 {
             return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof));
         }
 
-        Ok(u64::from_le_bytes(buf))
+        Ok(u64::from_le_bytes(buf.try_into().unwrap()))
     }
 
-    fn write_all<'a>(&self, data: &'a [u8]) -> impl Future<Output = std::io::Result<()>> + 'a {
+    pub fn write_all(&self, data: Vec<u8>) -> impl Future<Output = std::io::Result<()>> {
         let tx = self.tx_write.clone();
 
         async move {
@@ -60,11 +70,8 @@ impl Connection {
 
             let (response_tx, response_rx) = oneshot::channel();
 
-            // SAFETY: ???TODO
-            let data: &'static [u8] = unsafe { std::mem::transmute(data) };
-
             tx.send(Request {
-                buf: data,
+                data,
                 response: response_tx,
                 cancel_token: child_token,
             })
@@ -74,7 +81,7 @@ impl Connection {
         }
     }
 
-    fn read_buf<'a>(&self, buf: &'a mut [u8]) -> impl Future<Output = std::io::Result<usize>> + 'a {
+    pub fn read_buf(&self, size: usize) -> impl Future<Output = std::io::Result<Vec<u8>>> {
         let tx = self.tx_read.clone();
 
         async move {
@@ -84,11 +91,8 @@ impl Connection {
 
             let (response_tx, response_rx) = oneshot::channel();
 
-            // SAFETY: ???TODO
-            let buf: &'static mut [u8] = unsafe { std::mem::transmute(buf) };
-
             tx.send(Request {
-                buf,
+                data: size,
                 response: response_tx,
                 cancel_token: child_token,
             })
@@ -100,49 +104,53 @@ impl Connection {
 
     async fn process_writes(
         mut writer: OwnedWriteHalf,
-        address: SocketAddr,
-        mut rx: UnboundedReceiver<Request<&'static [u8], ()>>,
+        mut rx: UnboundedReceiver<Request<Vec<u8>, ()>>,
     ) {
         loop {
             while let Some(Request {
-                buf,
+                data,
                 response,
                 cancel_token,
             }) = rx.recv().await
             {
                 tokio::select! {
-                    result = writer.write_all(buf) => {
+                    result = writer.write_all(&data) => {
                         let _ = response.send(result);
                     }
                     _ = cancel_token.cancelled() => {}
                 }
             }
-
-            tracing::warn!(peer = %address, "connection closed");
         }
     }
 
     async fn process_reads(
         mut reader: OwnedReadHalf,
-        address: SocketAddr,
-        mut rx: UnboundedReceiver<Request<&'static mut [u8], usize>>,
+        mut rx: UnboundedReceiver<Request<usize, Vec<u8>>>,
     ) {
         loop {
             while let Some(Request {
-                mut buf,
+                data: size,
                 response,
                 cancel_token,
             }) = rx.recv().await
             {
+                let mut buf = vec![0; size];
+
                 tokio::select! {
                     result = reader.read_buf(&mut buf) => {
-                        let _ = response.send(result);
+                        match result {
+                            Ok(bytes_read) => {
+                                buf.truncate(bytes_read);
+                                let _ = response.send(Ok(buf));
+                            },
+                            Err(e) => {
+                                 let _ = response.send(Err(e));
+                            }
+                        }
                     }
                     _ = cancel_token.cancelled() => {}
                 }
             }
-
-            tracing::warn!(peer = %address, "connection closed");
         }
     }
 }

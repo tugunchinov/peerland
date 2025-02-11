@@ -278,7 +278,6 @@ dependencies = [
  "sync",
  "tokio",
  "tokio-util",
- "tracing",
  "turmoil",
 ]
 

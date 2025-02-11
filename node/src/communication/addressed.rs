@@ -3,10 +3,19 @@ use crate::{time, Node};
 use network::types::SocketAddr;
 use prost::Message;
 use rand::Rng;
-use std::fmt::Debug;
+use std::sync::Arc;
 
-impl<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider, R: Rng> Node<ST, LT, R> {
-    pub async fn send_to<B: AsRef<[u8]>>(&self, to: &SocketAddr, msg: B) -> Result<(), NodeError> {
+impl<
+        ST: time::SystemTimeProvider + Send + Sync + 'static,
+        LT: time::LogicalTimeProvider + Send + Sync + 'static,
+        R: Rng + Send + Sync + 'static,
+    > Node<ST, LT, R>
+{
+    pub async fn send_to<B: AsRef<[u8]>>(
+        self: &Arc<Self>,
+        to: SocketAddr,
+        msg: B,
+    ) -> Result<(), NodeError> {
         use crate::communication::proto::message::*;
 
         let node_msg = self.create_node_message(

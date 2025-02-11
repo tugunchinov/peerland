@@ -1,6 +1,5 @@
 use crate::time::{LogicalTimeProvider, Millis, SystemTimeProvider};
-use crate::{time, Node};
-use network::discovery::{Discovery, StaticDiscovery};
+use crate::Node;
 use network::turmoil;
 use network::types::SocketAddr;
 use rand::rngs::StdRng;
@@ -115,44 +114,67 @@ impl RngCore for DeterministicRandomizer {
     }
 }
 
+async fn setup_nodes<
+    AsRefStr: AsRef<str>,
+    Entropy: Rng + Clone + Send + Sync + 'static,
+    LT: LogicalTimeProvider + Send + Sync + 'static,
+    Fut: Future<Output = ()>,
+    R: FnOnce(Arc<Node<BrokenUnixTimeProvider<Entropy>, LT, Entropy>>) -> Fut + Clone + 'static,
+>(
+    nodes_name: &[AsRefStr],
+    rng: Entropy,
+    result: std::sync::mpsc::Sender<Vec<Arc<Node<BrokenUnixTimeProvider<Entropy>, LT, Entropy>>>>,
+) {
+    let mut nodes = Vec::with_capacity(nodes_name.len());
+
+    for (node_idx, _node_name) in nodes_name.iter().enumerate() {
+        let peers = node_names_to_addresses(nodes_name.clone());
+        let time_provider = BrokenUnixTimeProvider::new(rng.clone());
+        let entropy = rng.clone();
+
+        let node = Node::<_, _, _>::new(
+            node_idx as u32,
+            (IpAddr::from(Ipv4Addr::UNSPECIFIED), 9000),
+            time_provider,
+            entropy,
+            peers.into_iter(),
+        )
+        .await
+        .unwrap();
+
+        nodes.push(node);
+    }
+
+    result.send(nodes).unwrap()
+}
+
 fn configure_node_static<
     AsRefStr: AsRef<str>,
     Entropy: Rng + Clone + Send + Sync + 'static,
-    LT: time::LogicalTimeProvider + Send + Sync + 'static,
+    LT: LogicalTimeProvider + Send + Sync + 'static,
     Fut: Future<Output = ()>,
-    R: FnOnce(
-            Arc<Node<BrokenUnixTimeProvider<Entropy>, LT, StaticDiscovery<Entropy>, Entropy>>,
-        ) -> Fut
-        + Clone
-        + 'static,
+    R: FnOnce(Arc<Node<BrokenUnixTimeProvider<Entropy>, LT, Entropy>>) -> Fut + Clone + 'static,
 >(
-    nodes_name: Vec<AsRefStr>,
+    nodes_name: impl Iterator<Item = AsRefStr> + Clone,
     node_idx: usize,
     rng: Entropy,
     node_routine: R,
 ) -> impl Fn() -> Pin<Box<dyn Future<Output = turmoil::Result>>> {
     move || {
-        let mut other_nodes = Vec::with_capacity(nodes_name.len());
-        for (i, node_name) in nodes_name.iter().enumerate() {
-            if i != node_idx {
-                other_nodes.push((turmoil::lookup(node_name.as_ref()), 9000));
-            }
-        }
+        let peers = node_names_to_addresses(nodes_name.clone());
 
         let rng = rng.clone();
         let node_routine = node_routine.clone();
         Box::pin(async move {
             let time_provider = BrokenUnixTimeProvider::new(rng.clone());
-            let discovery =
-                StaticDiscovery::new(other_nodes.into_iter().map(SocketAddr::from), rng.clone());
             let entropy = rng.clone();
 
-            let node = Node::<_, LT, _, _>::new(
+            let node = Node::<_, _, _>::new(
                 node_idx as u32,
                 (IpAddr::from(Ipv4Addr::UNSPECIFIED), 9000),
                 time_provider,
-                discovery,
                 entropy,
+                peers.into_iter(),
             )
             .await
             .unwrap();
@@ -164,11 +186,23 @@ fn configure_node_static<
     }
 }
 
-fn wait_nodes<ST: SystemTimeProvider, LT: LogicalTimeProvider, D: Discovery, R: Rng>(
+fn node_names_to_addresses<S: AsRef<str>>(node_names: impl Iterator<Item = S>) -> Vec<SocketAddr> {
+    let mut addresses = Vec::with_capacity(256);
+    for node_name in node_names {
+        addresses.push(SocketAddr::from((
+            turmoil::lookup(node_name.as_ref()),
+            9000,
+        )));
+    }
+
+    addresses
+}
+
+fn wait_nodes<ST: SystemTimeProvider, LT: LogicalTimeProvider, R: Rng>(
     matrix: &mut turmoil::Sim,
     node_names: &[&str],
-    rx: std::sync::mpsc::Receiver<Arc<Node<ST, LT, D, R>>>,
-) -> Vec<Arc<Node<ST, LT, D, R>>> {
+    rx: std::sync::mpsc::Receiver<Arc<Node<ST, LT, R>>>,
+) -> Vec<Arc<Node<ST, LT, R>>> {
     let mut nodes = Vec::with_capacity(node_names.len());
     while nodes.len() < node_names.len() {
         matrix.run().unwrap();
@@ -192,9 +226,9 @@ fn wait_nodes<ST: SystemTimeProvider, LT: LogicalTimeProvider, D: Discovery, R: 
             }
         }
 
-        // if done {
-        //     break;
-        // }
+        if done {
+            break;
+        }
 
         matrix.run().unwrap();
 
