@@ -6,16 +6,17 @@ use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
 use std::sync::Arc;
 
-// const NODE_NAMES: [&str; 10] = [
-//     "node_1", "node_2", "node_3", "node_4", "node_5", "node_6", "node_7", "node_8", "node_9",
-//     "node_10",
-// ];
+const NODE_NAMES: [&str; 10] = [
+    "node_1", "node_2", "node_3", "node_4", "node_5", "node_6", "node_7", "node_8", "node_9",
+    "node_10",
+];
 
-const NODE_NAMES: [&str; 2] = ["node_1", "node_2"];
+const BROADCAST_MSG_CNT: usize = 10;
+const EXPECTED_MESSAGE_CNT: usize = BROADCAST_MSG_CNT * NODE_NAMES.len();
 
 #[test]
 fn reliable_broadcast() {
-    test_setup();
+    let _test_guard = test_setup();
 
     for i in 0..10 {
         let seed = rand::random();
@@ -33,7 +34,6 @@ fn reliable_broadcast() {
 
         let (tx, rx) = std::sync::mpsc::channel();
 
-        let broadcast_msg_cnt = 10;
         let barrier = Arc::new(tokio::sync::Barrier::new(NODE_NAMES.len()));
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
 
@@ -43,7 +43,7 @@ fn reliable_broadcast() {
                 let mut routine_rng = StdRng::seed_from_u64(common_rng.gen());
 
                 move |node: Arc<Node<BrokenUnixTimeProvider<_>, LamportClock, _>>| async move {
-                    for i in 0..broadcast_msg_cnt {
+                    for i in 0..BROADCAST_MSG_CNT {
                         let msg = format!("hello from {}: {i}", node.id);
                         while let Err(e) = node.broadcast_reliably(msg.clone()).await {
                             tracing::error!(
@@ -58,9 +58,17 @@ fn reliable_broadcast() {
                         .await;
                     }
 
-                    tracing::warn!("finished spaming");
+                    tracing::warn!("finished spaming. waiting...");
 
-                    tx.send(node).unwrap();
+                    loop {
+                        let received_msg_cnt = node.storage.lock().len();
+                        if received_msg_cnt == EXPECTED_MESSAGE_CNT {
+                            break;
+                        }
+                        tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                    }
+
+                    tx.send(node.storage.lock().clone()).unwrap();
                 }
             };
 
@@ -83,46 +91,17 @@ fn reliable_broadcast() {
             }
         }
 
-        let nodes = wait_nodes(&mut matrix, &NODE_NAMES, rx);
+        wait_nodes(&mut matrix, &NODE_NAMES, 120);
 
-        let start_ts = std::time::Instant::now();
-        let (storage_1, storage_2) = 'out: loop {
-            let mut storages = Vec::with_capacity(nodes.len());
+        let mut storages = Vec::with_capacity(NODE_NAMES.len());
+        for _ in NODE_NAMES {
+            let mut storage = rx.try_recv().unwrap();
+            storage.sort();
+            storages.push(storage);
+        }
 
-            for node in nodes.iter() {
-                let storage_guard = node.storage.lock();
-
-                let mut storage = Vec::with_capacity(storage_guard.len());
-                for msg in storage_guard.iter() {
-                    let msg_str = String::from_utf8(msg.clone()).unwrap();
-                    storage.push(msg_str);
-                }
-                storage.sort();
-                storages.push(storage);
-            }
-
-            for i in 1..storages.len() {
-                if storages[i - 1] != storages[i] {
-                    let elapsed = start_ts.elapsed();
-
-                    if elapsed.as_secs() > 30 {
-                        let (failed_storage_1, failed_storage_2) =
-                            (storages[i - 1].clone(), storages[i].clone());
-
-                        break 'out (failed_storage_1, failed_storage_2);
-                    }
-
-                    // Maybe still in progress...
-                    break;
-                }
-            }
-
-            matrix.run().unwrap();
-        };
-
-        // Last chance...
-        matrix.run().unwrap();
-
-        assert_eq!(storage_1, storage_2);
+        for i in 1..storages.len() {
+            assert_eq!(storages[i - 1], storages[i]);
+        }
     }
 }

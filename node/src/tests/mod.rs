@@ -2,13 +2,13 @@ use crate::time::{LogicalTimeProvider, Millis, SystemTimeProvider};
 use crate::Node;
 use network::turmoil;
 use network::types::SocketAddr;
+use rand::prelude::StdRng;
 use rand::Rng;
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::sync::Once;
 use std::time::SystemTime;
 use sync::SpinLock;
 
@@ -18,11 +18,24 @@ mod clocks;
 #[cfg(feature = "simulation")]
 mod broadcast;
 
-static INIT: Once = Once::new();
+#[cfg(feature = "simulation")]
+mod communication;
+
+struct TestConfiguration {
+    test_rng: StdRng,
+    matrix_range: StdRng,
+    node_setup_barrier: Arc<tokio::sync::Barrier>,
+    node_setup_ready_tx: std::sync::mpsc::Sender<()>,
+    node_setup_ready_rx: std::sync::mpsc::Receiver<()>,
+}
+
+static LOG_INIT: std::sync::Once = std::sync::Once::new();
+static TEST_MUTEX: std::sync::LazyLock<std::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
 
 /// Setup function that is only run once, even if called multiple times.
-fn test_setup() {
-    INIT.call_once(|| {
+fn test_setup<'a>() -> std::sync::MutexGuard<'a, ()> {
+    LOG_INIT.call_once(|| {
         tracing::subscriber::set_global_default(
             tracing_subscriber::fmt()
                 .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -30,6 +43,8 @@ fn test_setup() {
         )
         .expect("Configure tracing");
     });
+
+    TEST_MUTEX.lock().unwrap()
 }
 
 // TODO: extract mod
@@ -146,49 +161,17 @@ fn node_names_to_addresses<S: AsRef<str>>(node_names: &[S]) -> Vec<SocketAddr> {
     addresses
 }
 
-fn wait_nodes<ST: SystemTimeProvider, LT: LogicalTimeProvider, R: Rng>(
-    matrix: &mut turmoil::Sim,
-    node_names: &[&str],
-    rx: std::sync::mpsc::Receiver<Arc<Node<ST, LT, R>>>,
-) -> Vec<Arc<Node<ST, LT, R>>> {
-    let expected_count = /* connections + accept */ node_names.len() + /* here from closure */ 1;
-
-    let mut nodes = Vec::with_capacity(node_names.len());
-    while nodes.len() < node_names.len() {
-        matrix.run().unwrap();
-
-        while let Ok(node) = rx.try_recv() {
-            nodes.push(node);
-        }
-    }
-
+fn wait_nodes(matrix: &mut turmoil::Sim, node_names: &[&str], timeout_secs: u64) {
     let now = std::time::Instant::now();
 
-    // make sure everyone has finished
-    loop {
-        let mut done = true;
-
-        for node in nodes.iter() {
-            // 1 listening + 1 here
-            if Arc::strong_count(node) > expected_count {
-                println!("{}", Arc::strong_count(node));
-                done = false;
-                break;
+    for name in node_names {
+        while matrix.is_host_running(*name) {
+            let elapsed = now.elapsed().as_secs();
+            if elapsed > timeout_secs {
+                tracing::info!("Testing too long... Give up.");
+                return;
             }
-        }
-
-        if done {
-            break;
-        }
-
-        matrix.run().unwrap();
-
-        let elapsed = now.elapsed().as_secs();
-        if elapsed > 20 {
-            tracing::info!("Testing too long... Give up.");
-            break;
+            matrix.run().unwrap();
         }
     }
-
-    nodes
 }

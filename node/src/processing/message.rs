@@ -26,7 +26,7 @@ impl<
         };
 
         {
-            let mut processed_messages_guard = self.processed_messages.lock().await;
+            let mut processed_messages_guard = self.processed_messages.lock();
 
             if processed_messages_guard.contains(&msg_id) {
                 // Processed

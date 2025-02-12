@@ -20,7 +20,6 @@ use rand::Rng;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use sync::SpinLock;
-use tokio::sync::Mutex;
 
 pub(crate) struct Node<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider, R: Rng> {
     id: u32,
@@ -32,7 +31,7 @@ pub(crate) struct Node<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvid
     storage: SpinLock<Vec<Vec<u8>>>,
 
     // TODO: lock-free?
-    processed_messages: Mutex<HashSet<uuid::Uuid>>,
+    processed_messages: SpinLock<HashSet<uuid::Uuid>>,
 
     // TODO: lock-free?
     established_connections: SpinLock<HashMap<SocketAddr, Arc<Connection>>>,
@@ -64,7 +63,7 @@ impl<
             id,
             socket,
             storage: SpinLock::new(vec![]),
-            processed_messages: Mutex::new(HashSet::new()),
+            processed_messages: SpinLock::new(HashSet::new()),
             established_connections: SpinLock::new(HashMap::new()),
             system_time_provider: time_provider,
             logical_time_provider,

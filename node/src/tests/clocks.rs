@@ -10,7 +10,7 @@ const NODE_NAMES: [&str; 5] = ["node_1", "node_2", "node_3", "node_4", "node_5"]
 
 #[test]
 fn lt_doesnt_go_backwards() {
-    test_setup();
+    let _test_guard = test_setup();
 
     for i in 0..10 {
         let seed = rand::random();
@@ -24,15 +24,13 @@ fn lt_doesnt_go_backwards() {
             .enable_random_order()
             .build_with_rng(matrix_rng);
 
-        let (tx, rx) = std::sync::mpsc::channel();
-
-        let spam_msg_cnt = 100;
         let barrier = Arc::new(tokio::sync::Barrier::new(NODE_NAMES.len()));
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
 
+        let spam_msg_cnt = 100;
+
         for (node_idx, node_name) in NODE_NAMES.iter().enumerate() {
             let node_routine = {
-                let tx = tx.clone();
                 let mut routine_rng = StdRng::seed_from_u64(common_rng.gen());
 
                 move |node: Arc<Node<BrokenUnixTimeProvider<_>, LamportClock, _>>| async move {
@@ -52,8 +50,6 @@ fn lt_doesnt_go_backwards() {
                     }
 
                     tracing::warn!("finished spaming");
-
-                    tx.send(node).unwrap();
                 }
             };
 
@@ -76,6 +72,6 @@ fn lt_doesnt_go_backwards() {
             }
         }
 
-        let _ = wait_nodes(&mut matrix, &NODE_NAMES, rx);
+        wait_nodes(&mut matrix, &NODE_NAMES, 30);
     }
 }
