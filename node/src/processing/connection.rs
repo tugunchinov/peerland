@@ -17,7 +17,8 @@ impl<
             match connection.read_u64_le().await {
                 Ok(msg_size) => match connection.read_exact(msg_size as usize).await {
                     Ok(serialized_msg) => {
-                        let Ok(deserialized_msg) = NodeMessage::decode(serialized_msg.as_slice())
+                        let Ok(mut deserialized_msg) =
+                            NodeMessage::decode(serialized_msg.as_slice())
                         else {
                             tracing::error!(%peer, "bad message");
                             continue;
@@ -25,7 +26,7 @@ impl<
 
                         self.logical_time_provider
                             .adjust_from_message(&deserialized_msg);
-                        self.logical_time_provider.tick();
+                        deserialized_msg.lt = Some(self.logical_time_provider.tick().into());
 
                         if let Err(e) = self.process_message(peer, deserialized_msg).await {
                             tracing::error!(

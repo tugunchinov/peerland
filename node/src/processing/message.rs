@@ -2,7 +2,6 @@ use crate::communication::proto::message::{broadcast, MessageKind, NodeMessage};
 use crate::error::NodeError;
 use crate::{time, Node};
 use network::types::SocketAddr;
-use prost::Message;
 use rand::prelude::SliceRandom;
 use rand::Rng;
 use std::ops::DerefMut;
@@ -61,21 +60,13 @@ impl<
                             all_peers.truncate(3);
 
                             // TODO: better
-                            self.broadcast_to(
-                                msg.encode_to_vec(),
-                                all_peers.into_iter(),
-                                Some(true),
-                            )
-                            .await;
+                            self.broadcast_to(msg, all_peers.into_iter(), Some(true))
+                                .await;
                         }
                         broadcast::BroadcastType::Reliable => {
                             // TODO: better
-                            self.broadcast_to(
-                                msg.encode_to_vec(),
-                                all_peers.into_iter(),
-                                Some(false),
-                            )
-                            .await;
+                            self.broadcast_to(msg, all_peers.into_iter(), Some(false))
+                                .await;
                         }
                     }
                 }

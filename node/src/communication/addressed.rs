@@ -1,7 +1,6 @@
 use crate::error::NodeError;
 use crate::{time, Node};
 use network::types::SocketAddr;
-use prost::Message;
 use rand::Rng;
 use std::sync::Arc;
 
@@ -23,7 +22,6 @@ impl<
             MessageKind::Addressed(addressed::MessageType::Ordinary.into()),
         );
 
-        self.send_serialized_message(&node_msg.encode_to_vec(), to)
-            .await
+        self.send_message(node_msg, to).await
     }
 }

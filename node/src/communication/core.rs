@@ -4,6 +4,7 @@ use crate::error::NodeError;
 use crate::{time, Node, DEFAULT_TIMEOUT};
 use network::types::*;
 use network::Connection;
+use prost::Message;
 use rand::Rng;
 use std::sync::Arc;
 use tokio::task::JoinSet;
@@ -63,9 +64,9 @@ impl<
         Ok(connection)
     }
 
-    pub(in crate::communication) async fn send_serialized_message(
+    pub(in crate::communication) async fn send_message(
         self: &Arc<Self>,
-        serialized_msg: &[u8],
+        mut message: NodeMessage,
         to: SocketAddr,
     ) -> Result<(), NodeError> {
         tracing::info!(recipient = ?to, "sending message");
@@ -76,6 +77,9 @@ impl<
             Some(connection) => connection,
             None => return Err(NodeError::UnknownPeer(to)),
         };
+
+        message.lt = Some(self.logical_time_provider.tick().into());
+        let serialized_msg = message.encode_to_vec();
 
         let size_bytes = (serialized_msg.len() as u64).to_le_bytes();
         let msg_with_size = size_bytes
@@ -93,7 +97,7 @@ impl<
     // TODO: time out anyway
     pub(crate) async fn broadcast_to(
         self: &Arc<Self>,
-        serialized_msg: Vec<u8>,
+        message: NodeMessage,
         to: impl Iterator<Item = SocketAddr>,
         skip_failed: Option<bool>,
     ) {
@@ -101,11 +105,11 @@ impl<
 
         let mut tasks = JoinSet::new();
         for node in to {
-            let serialized_msg = serialized_msg.clone();
+            let message = message.clone();
             let this = Arc::clone(self);
 
             tasks.spawn(async move {
-                while let Err(e) = this.send_serialized_message(&serialized_msg, node).await {
+                while let Err(e) = this.send_message(message.clone(), node).await {
                     tracing::error!(
                         error = %e,
                         "failed sending message"
@@ -134,7 +138,7 @@ impl<ST: time::SystemTimeProvider, LT: time::LogicalTimeProvider, R: Rng> Node<S
             id: Some(uuid::Uuid::new_v4().into()),
             message_kind: Some(msg_kind),
             ts: Some(ts),
-            lt: Some(self.logical_time_provider.tick().into()),
+            lt: None,
             payload: data.as_ref().to_vec(),
         }
     }
