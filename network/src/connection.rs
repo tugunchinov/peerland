@@ -5,30 +5,32 @@ use crate::types::{
 use std::future::Future;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::oneshot;
 
-struct Request<D, Res> {
-    data: D,
+struct Request<C, Res> {
+    command: C,
     response: oneshot::Sender<std::io::Result<Res>>,
     cancel_token: tokio_util::sync::CancellationToken,
 }
 
-// TODO:
 enum ReadCommand {
-    ReadBuf,
-    ReadExact,
+    ReadBuf(Vec<u8>),
+    ReadExact(Vec<u8>),
     ReadU64LE,
+}
+
+enum WriteCommand {
+    WriteAll(Vec<u8>),
 }
 
 // TODO: use bounded channels
 pub struct Connection {
-    tx_write: UnboundedSender<Request<Vec<u8>, ()>>,
-    tx_read: UnboundedSender<Request<usize, Vec<u8>>>,
+    tx_write: Sender<Request<WriteCommand, ()>>,
+    tx_read: Sender<Request<ReadCommand, (u64, Option<Vec<u8>>)>>,
     peer_addr: SocketAddr,
 }
 
-// TODO: read_exact is not cancel-safe!!
 impl Connection {
     pub async fn establish(with: SocketAddr) -> Result<Arc<Self>, std::io::Error> {
         let stream = TcpStream::connect(with).await?;
@@ -41,10 +43,12 @@ impl Connection {
 
         let (reader, writer) = stream.into_split();
 
-        let (tx_write, rx_write) = unbounded_channel();
+        // TODO: bounds from config/args?
+
+        let (tx_write, rx_write) = channel(100_000);
         tokio::spawn(Self::process_writes(writer, rx_write));
 
-        let (tx_read, rx_read) = unbounded_channel();
+        let (tx_read, rx_read) = channel(100_000);
         tokio::spawn(Self::process_reads(reader, rx_read));
 
         Ok(Arc::new(Self {
@@ -58,15 +62,29 @@ impl Connection {
         self.peer_addr
     }
 
-    pub async fn read_u64_le(&self) -> std::io::Result<u64> {
-        let buf = self.read_exact(8).await?;
+    pub fn read_u64_le(&self) -> impl Future<Output = std::io::Result<u64>> {
+        let tx = self.tx_read.clone();
 
-        if buf.len() != 8 {
-            println!("READ: {}", buf.len());
-            return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof));
+        async move {
+            let cancel_token = tokio_util::sync::CancellationToken::new();
+            let child_token = cancel_token.child_token();
+            let _drop_guard = cancel_token.drop_guard();
+
+            let (response_tx, response_rx) = oneshot::channel();
+
+            tx.send(Request {
+                command: ReadCommand::ReadU64LE,
+                response: response_tx,
+                cancel_token: child_token,
+            })
+            .await
+            .expect("broken connection");
+
+            response_rx
+                .await
+                .expect("broken connection")
+                .map(|(n, _)| n)
         }
-
-        Ok(u64::from_le_bytes(buf.try_into().unwrap()))
     }
 
     pub fn write_all(&self, data: Vec<u8>) -> impl Future<Output = std::io::Result<()>> {
@@ -80,17 +98,18 @@ impl Connection {
             let (response_tx, response_rx) = oneshot::channel();
 
             tx.send(Request {
-                data,
+                command: WriteCommand::WriteAll(data),
                 response: response_tx,
                 cancel_token: child_token,
             })
+            .await
             .expect("broken connection");
 
             response_rx.await.expect("broken connection")
         }
     }
 
-    pub fn read_exact(&self, size: usize) -> impl Future<Output = std::io::Result<Vec<u8>>> {
+    pub fn read_exact(&self, buf: Vec<u8>) -> impl Future<Output = std::io::Result<Vec<u8>>> {
         let tx = self.tx_read.clone();
 
         async move {
@@ -101,32 +120,41 @@ impl Connection {
             let (response_tx, response_rx) = oneshot::channel();
 
             tx.send(Request {
-                data: size,
+                command: ReadCommand::ReadExact(buf),
                 response: response_tx,
                 cancel_token: child_token,
             })
+            .await
             .expect("broken connection");
 
-            response_rx.await.expect("broken connection")
+            response_rx
+                .await
+                .expect("broken connection")
+                .map(|(_, buf)| buf.unwrap())
         }
     }
 
     async fn process_writes(
         mut writer: OwnedWriteHalf,
-        mut rx: UnboundedReceiver<Request<Vec<u8>, ()>>,
+        mut rx: Receiver<Request<WriteCommand, ()>>,
     ) {
         loop {
             while let Some(Request {
-                data,
+                command,
                 response,
                 cancel_token,
             }) = rx.recv().await
             {
-                tokio::select! {
-                    result = writer.write_all(&data) => {
-                        let _ = response.send(result);
+                match command {
+                    WriteCommand::WriteAll(data) => {
+                        // Not cancel safe. Use cancel token to cancel on drop
+                        tokio::select! {
+                            result = writer.write_all(&data) => {
+                                let _ = response.send(result);
+                            }
+                            _ = cancel_token.cancelled() => {}
+                        }
                     }
-                    _ = cancel_token.cancelled() => {}
                 }
             }
         }
@@ -134,30 +162,43 @@ impl Connection {
 
     async fn process_reads(
         mut reader: OwnedReadHalf,
-        mut rx: UnboundedReceiver<Request<usize, Vec<u8>>>,
+        mut rx: Receiver<Request<ReadCommand, (u64, Option<Vec<u8>>)>>,
     ) {
         loop {
             while let Some(Request {
-                data: size,
+                command,
                 response,
                 cancel_token,
             }) = rx.recv().await
             {
-                let mut buf = vec![0; size];
-
-                tokio::select! {
-                    result = reader.read_exact(&mut buf) => {
-                        match result {
-                            Ok(bytes_read) => {
-                                buf.truncate(bytes_read);
-                                let _ = response.send(Ok(buf));
-                            },
-                            Err(e) => {
-                                 let _ = response.send(Err(e));
+                match command {
+                    ReadCommand::ReadBuf(mut buf) => {
+                        tokio::select! {
+                            result = reader.read_buf(&mut buf) => {
+                                let _ = response.send(result.map(|b| (b as u64, Some(buf))));
                             }
+                            _ = cancel_token.cancelled() => {}
                         }
                     }
-                    _ = cancel_token.cancelled() => {}
+
+                    ReadCommand::ReadExact(mut buf) => {
+                        // Not cancel safe. Use cancel token to cancel on drop
+                        tokio::select! {
+                            result = reader.read_exact(&mut buf) => {
+                                let _ = response.send(result.map(|b| (b as u64, Some(buf))));
+                            }
+                            _ = cancel_token.cancelled() => {}
+                        }
+                    }
+                    ReadCommand::ReadU64LE => {
+                        // Not cancel safe. Use cancel token to cancel on drop
+                        tokio::select! {
+                            result =  reader.read_u64_le() => {
+                                let _ = response.send(result.map(|n| (n, None)));
+                            }
+                            _ = cancel_token.cancelled() => {}
+                        }
+                    }
                 }
             }
         }

@@ -15,52 +15,57 @@ impl<
         let peer = connection.peer_addr();
         loop {
             match connection.read_u64_le().await {
-                Ok(msg_size) => match connection.read_exact(msg_size as usize).await {
-                    Ok(serialized_msg) => {
-                        let Ok(mut deserialized_msg) =
-                            NodeMessage::decode(serialized_msg.as_slice())
-                        else {
-                            tracing::error!(%peer, "bad message");
-                            continue;
-                        };
+                Ok(msg_size) => {
+                    // TODO: optimize allocation
+                    let buf = vec![0u8; msg_size as usize];
 
-                        self.logical_time_provider
-                            .adjust_from_message(&deserialized_msg);
-                        deserialized_msg.lt = Some(self.logical_time_provider.tick().into());
+                    match connection.read_exact(buf).await {
+                        Ok(serialized_msg) => {
+                            let Ok(mut deserialized_msg) =
+                                NodeMessage::decode(serialized_msg.as_slice())
+                            else {
+                                tracing::error!(%peer, "bad message");
+                                continue;
+                            };
 
-                        if let Err(e) = self.process_message(peer, deserialized_msg).await {
+                            self.logical_time_provider
+                                .adjust_from_message(&deserialized_msg);
+                            deserialized_msg.lt = Some(self.logical_time_provider.tick().into());
+
+                            if let Err(e) = self.process_message(peer, deserialized_msg).await {
+                                tracing::error!(
+                                    %peer,
+                                    error = %e,
+                                    "failed processing message"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            if matches!(
+                                e.kind(),
+                                std::io::ErrorKind::ConnectionAborted
+                                    | std::io::ErrorKind::ConnectionRefused
+                                    | std::io::ErrorKind::ConnectionReset
+                            ) {
+                                tracing::warn!(
+                                    %peer,
+                                    error = %e,
+                                    "connection closed"
+                                );
+
+                                self.established_connections.lock().remove(&peer);
+
+                                return;
+                            }
+
                             tracing::error!(
                                 %peer,
                                 error = %e,
-                                "failed processing message"
+                                "failed reading message"
                             );
                         }
                     }
-                    Err(e) => {
-                        if matches!(
-                            e.kind(),
-                            std::io::ErrorKind::ConnectionAborted
-                                | std::io::ErrorKind::ConnectionRefused
-                                | std::io::ErrorKind::ConnectionReset
-                        ) {
-                            tracing::warn!(
-                                %peer,
-                                error = %e,
-                                "connection closed"
-                            );
-
-                            self.established_connections.lock().remove(&peer);
-
-                            return;
-                        }
-
-                        tracing::error!(
-                            %peer,
-                            error = %e,
-                            "failed reading message"
-                        );
-                    }
-                },
+                }
                 Err(e) => {
                     tracing::error!(
                         %peer,
