@@ -4,6 +4,8 @@ use crate::{time, Node};
 use rand::Rng;
 use std::sync::Arc;
 
+// TODO: just add public API
+
 impl<
         ST: time::SystemTimeProvider + Send + Sync + 'static,
         LT: time::LogicalTimeProvider + Send + Sync + 'static,

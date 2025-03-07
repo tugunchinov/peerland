@@ -13,13 +13,13 @@ impl<
 {
     pub(crate) async fn process_connection(self: &Arc<Self>, connection: Arc<Connection>) {
         let peer = connection.peer_addr();
+        let mut buf = vec![0u8; 1024];
         loop {
             match connection.read_u64_le().await {
                 Ok(msg_size) => {
-                    // TODO: optimize allocation
-                    let buf = vec![0u8; msg_size as usize];
+                    buf.resize(msg_size as usize, 0);
 
-                    match connection.read_exact(buf).await {
+                    match connection.read_exact(std::mem::take(&mut buf)).await {
                         Ok(serialized_msg) => {
                             let Ok(mut deserialized_msg) =
                                 NodeMessage::decode(serialized_msg.as_slice())
@@ -39,6 +39,8 @@ impl<
                                     "failed processing message"
                                 );
                             }
+
+                            buf = serialized_msg;
                         }
                         Err(e) => {
                             if matches!(
