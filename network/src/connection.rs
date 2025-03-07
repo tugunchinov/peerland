@@ -24,7 +24,6 @@ enum WriteCommand {
     WriteAll(Vec<u8>),
 }
 
-// TODO: use bounded channels
 pub struct Connection {
     tx_write: Sender<Request<WriteCommand, ()>>,
     tx_read: Sender<Request<ReadCommand, (u64, Option<Vec<u8>>)>>,
@@ -147,7 +146,8 @@ impl Connection {
             {
                 match command {
                     WriteCommand::WriteAll(data) => {
-                        // Not cancel safe. Use cancel token to cancel on drop
+                        // Not cancel safe.
+                        // Using cancel token to cancel on drop
                         tokio::select! {
                             result = writer.write_all(&data) => {
                                 let _ = response.send(result);
@@ -182,7 +182,8 @@ impl Connection {
                     }
 
                     ReadCommand::ReadExact(mut buf) => {
-                        // Not cancel safe. Use cancel token to cancel on drop
+                        // Not cancel safe.
+                        // Using cancel token to cancel on drop
                         tokio::select! {
                             result = reader.read_exact(&mut buf) => {
                                 let _ = response.send(result.map(|b| (b as u64, Some(buf))));
@@ -191,7 +192,8 @@ impl Connection {
                         }
                     }
                     ReadCommand::ReadU64LE => {
-                        // Not cancel safe. Use cancel token to cancel on drop
+                        // Not cancel safe.
+                        // Using cancel token to cancel on drop
                         tokio::select! {
                             result =  reader.read_u64_le() => {
                                 let _ = response.send(result.map(|n| (n, None)));

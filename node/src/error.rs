@@ -8,22 +8,24 @@ pub enum NodeError {
     IOError(#[from] std::io::Error),
     #[error("unknown peer: {0}")]
     UnknownPeer(SocketAddr),
+    #[error("decode error: {0}")]
+    DecodeError(String),
 }
 
 impl From<std::str::Utf8Error> for NodeError {
-    fn from(_value: std::str::Utf8Error) -> Self {
-        todo!()
+    fn from(value: std::str::Utf8Error) -> Self {
+        Self::DecodeError(value.to_string())
     }
 }
 
 impl From<std::string::FromUtf8Error> for NodeError {
-    fn from(_value: std::string::FromUtf8Error) -> Self {
-        todo!()
+    fn from(value: std::string::FromUtf8Error) -> Self {
+        Self::DecodeError(value.to_string())
     }
 }
 
 impl From<prost::DecodeError> for NodeError {
-    fn from(_value: prost::DecodeError) -> Self {
-        todo!()
+    fn from(value: prost::DecodeError) -> Self {
+        Self::DecodeError(value.to_string())
     }
 }
